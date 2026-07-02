@@ -1,0 +1,35 @@
+# --- HarmonyOS 核心排除项 ---
+# 依赖模块 (绝对不要提交)
+/oh_modules/
+/node_modules/
+
+# 编译输出目录
+/build/
+/.hvigor/
+/out/
+
+# IDE 配置与临时文件
+/.idea/
+/.vscode/
+*.iml
+*.iws
+*.swp
+
+# 预览与测试
+/.preview/
+/.cxx/
+/.test/
+
+# 系统生成文件
+.DS_Store
+Thumbs.db
+
+# 日志和缓存
+*.log
+*.cache
+
+# 编译产物
+*.apk
+*.aab
+*.bin
+*.so
