@@ -1,0 +1,24 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "label"
+    },
+    {
+      "name": "read_imagevideo_reason",
+      "value": "用于读取相册中的图片进行分类管理"
+    },
+    {
+      "name": "write_imagevideo_reason",
+      "value": "用于将AI分类后的图片保存到相册"
+    }
+  ]
+}
