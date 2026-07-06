@@ -1,5 +1,4 @@
-# 项目名称
-HarmonyOS 类社交媒体应用
+# HarmonyOS 类社交媒体应用
 
 [![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![HarmonyOS](https://img.shields.io/badge/HarmonyOS-5.0+-brightgreen)](https://developer.harmonyos.com/)
