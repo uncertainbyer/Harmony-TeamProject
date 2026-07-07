@@ -55,6 +55,39 @@ export class PostRepository {
     return post;
   }
 
+  /** 查询帖子（包含软删除数据，供分布式冲突处理使用）。 */
+  async queryPostByIdIncludingDeleted(postId: string): Promise<PostModel | null> {
+    const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
+      PostModel.getTableName()
+    );
+    predicates.equalTo('post_id', postId);
+    const resultSet: relationalStore.ResultSet = await this.rdbManager.query(predicates);
+    const post: PostModel | null = this.parseResultSetToPost(resultSet);
+    resultSet.close();
+    return post;
+  }
+
+  /**
+   * 合并远端帖子。相同ID采用更新时间较新的版本，未同步的本地新版本不会被旧数据覆盖。
+   */
+  async upsertRemotePost(post: PostModel): Promise<boolean> {
+    const local: PostModel | null = await this.queryPostByIdIncludingDeleted(post.postId);
+    post.syncStatus = 1;
+    if (local === null) {
+      await this.insertPost(post);
+      return true;
+    }
+    if (local.updateTime > post.updateTime) {
+      return false;
+    }
+    const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
+      PostModel.getTableName()
+    );
+    predicates.equalTo('post_id', post.postId);
+    await this.rdbManager.update(PostModel.getTableName(), post.toValuesBucket(), predicates);
+    return true;
+  }
+
   /**
    * 查询所有帖子（按时间倒序）
    * @param limit 限制数量
@@ -157,6 +190,7 @@ export class PostRepository {
    */
   async updatePost(post: PostModel): Promise<number> {
     post.updateTime = Date.now();
+    post.syncStatus = 0;
     const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
       PostModel.getTableName()
     );
@@ -180,6 +214,7 @@ export class PostRepository {
     const values: relationalStore.ValuesBucket = {};
     values['like_count'] = likeCount;
     values['update_time'] = Date.now();
+    values['sync_status'] = 0;
 
     const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
       PostModel.getTableName()
@@ -204,6 +239,7 @@ export class PostRepository {
     const values: relationalStore.ValuesBucket = {};
     values['comment_count'] = commentCount;
     values['update_time'] = Date.now();
+    values['sync_status'] = 0;
 
     const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
       PostModel.getTableName()
@@ -234,6 +270,7 @@ export class PostRepository {
     values['category_id'] = categoryId;
     values['category_name'] = categoryName;
     values['update_time'] = Date.now();
+    values['sync_status'] = 0;
 
     const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
       PostModel.getTableName()
@@ -257,6 +294,7 @@ export class PostRepository {
     const values: relationalStore.ValuesBucket = {};
     values['is_deleted'] = 1;
     values['update_time'] = Date.now();
+    values['sync_status'] = 0;
 
     const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
       PostModel.getTableName()
@@ -283,7 +321,6 @@ export class PostRepository {
       PostModel.getTableName()
     );
     predicates.equalTo('sync_status', 0);
-    predicates.equalTo('is_deleted', 0);
 
     const resultSet: relationalStore.ResultSet = await this.rdbManager.query(predicates);
     const posts: PostModel[] = this.parseResultSetToPosts(resultSet);

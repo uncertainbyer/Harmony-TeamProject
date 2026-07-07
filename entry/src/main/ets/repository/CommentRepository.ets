@@ -70,6 +70,50 @@ export class CommentRepository {
     }
   }
 
+  /** 查询评论（包含软删除数据，供分布式合并使用）。 */
+  async queryCommentByIdIncludingDeleted(commentId: string): Promise<CommentModel | null> {
+    const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
+      CommentModel.getTableName()
+    );
+    predicates.equalTo('comment_id', commentId);
+    const resultSet: relationalStore.ResultSet = await this.rdbManager.query(predicates);
+    const comment: CommentModel | null = this.parseResultSetToComment(resultSet);
+    resultSet.close();
+    return comment;
+  }
+
+  /** 合并远端评论，保留尚未同步的本地修改。 */
+  async upsertRemoteComment(comment: CommentModel): Promise<boolean> {
+    const local: CommentModel | null = await this.queryCommentByIdIncludingDeleted(comment.commentId);
+    comment.syncStatus = 1;
+    if (local === null) {
+      await this.insertComment(comment);
+      return true;
+    }
+    if (local.syncStatus === 0 && local.createTime >= comment.createTime) {
+      return false;
+    }
+    const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
+      CommentModel.getTableName()
+    );
+    predicates.equalTo('comment_id', comment.commentId);
+    await this.rdbManager.update(CommentModel.getTableName(), comment.toValuesBucket(), predicates);
+    return true;
+  }
+
+  /** 查询全部可见评论，用于新设备首次全量同步。 */
+  async queryAllComments(): Promise<CommentModel[]> {
+    const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
+      CommentModel.getTableName()
+    );
+    predicates.equalTo('is_deleted', 0);
+    predicates.orderByAsc('create_time');
+    const resultSet: relationalStore.ResultSet = await this.rdbManager.query(predicates);
+    const comments: CommentModel[] = this.parseResultSetToComments(resultSet);
+    resultSet.close();
+    return comments;
+  }
+
   /**
    * 查询帖子的所有一级评论
    * @param postId 帖子ID
@@ -205,6 +249,7 @@ export class CommentRepository {
    */
   async updateComment(comment: CommentModel): Promise<number> {
     try {
+      comment.syncStatus = 0;
       const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
         CommentModel.getTableName()
       );
@@ -233,6 +278,7 @@ export class CommentRepository {
     try {
       const values: relationalStore.ValuesBucket = {};
       values['like_count'] = likeCount;
+      values['sync_status'] = 0;
 
       const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
         CommentModel.getTableName()
@@ -261,6 +307,7 @@ export class CommentRepository {
     try {
       const values: relationalStore.ValuesBucket = {};
       values['is_deleted'] = 1;
+      values['sync_status'] = 0;
 
       const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
         CommentModel.getTableName()
@@ -290,7 +337,6 @@ export class CommentRepository {
         CommentModel.getTableName()
       );
       predicates.equalTo('sync_status', 0);
-      predicates.equalTo('is_deleted', 0);
 
       const resultSet: relationalStore.ResultSet = await this.rdbManager.query(predicates);
       const comments: CommentModel[] = this.parseResultSetToComments(resultSet);

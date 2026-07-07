@@ -1,6 +1,7 @@
 import { CommentModel } from '../model/CommentModel';
 import { CommentRepository } from '../repository/CommentRepository';
 import { PostService } from './PostService';
+import { SyncEventBus } from '../distributed/SyncEventBus';
 
 /**
  * 评论业务层
@@ -9,6 +10,7 @@ import { PostService } from './PostService';
 export class CommentService {
   private commentRepository: CommentRepository = new CommentRepository();
   private postService: PostService = new PostService();
+  private syncEventBus: SyncEventBus = SyncEventBus.getInstance();
 
   /**
    * 发表一级评论
@@ -43,6 +45,7 @@ export class CommentService {
 
       await this.commentRepository.insertComment(comment);
       await this.postService.updatePostCommentCount(postId);
+      this.syncEventBus.requestSync();
       console.info('[CommentService] 发表评论成功:', comment.commentId);
       return comment;
     } catch (err) {
@@ -93,6 +96,7 @@ export class CommentService {
 
       await this.commentRepository.insertComment(comment);
       await this.postService.updatePostCommentCount(postId);
+      this.syncEventBus.requestSync();
       console.info('[CommentService] 回复评论成功:', comment.commentId);
       return comment;
     } catch (err) {
@@ -219,6 +223,9 @@ export class CommentService {
 
       comment.content = content;
       const rowCount: number = await this.commentRepository.updateComment(comment);
+      if (rowCount > 0) {
+        this.syncEventBus.requestSync();
+      }
       return rowCount > 0;
     } catch (err) {
       const errorMsg: string = (err as Error).message;
@@ -241,6 +248,7 @@ export class CommentService {
 
       const newLikeCount: number = comment.likeCount + 1;
       await this.commentRepository.updateCommentLikeCount(commentId, newLikeCount);
+      this.syncEventBus.requestSync();
       return newLikeCount;
     } catch (err) {
       const errorMsg: string = (err as Error).message;
@@ -263,6 +271,7 @@ export class CommentService {
 
       const newLikeCount: number = Math.max(0, comment.likeCount - 1);
       await this.commentRepository.updateCommentLikeCount(commentId, newLikeCount);
+      this.syncEventBus.requestSync();
       return newLikeCount;
     } catch (err) {
       const errorMsg: string = (err as Error).message;
@@ -282,6 +291,7 @@ export class CommentService {
       const rowCount: number = await this.commentRepository.deleteComment(commentId);
       if (rowCount > 0) {
         await this.postService.updatePostCommentCount(postId);
+        this.syncEventBus.requestSync();
         console.info('[CommentService] 删除评论成功:', commentId);
       }
       return rowCount > 0;

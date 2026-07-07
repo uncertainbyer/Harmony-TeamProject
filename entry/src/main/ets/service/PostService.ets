@@ -2,6 +2,7 @@ import { PostModel } from '../model/PostModel';
 import { CategoryModel } from '../model/CategoryModel';
 import { PostRepository } from '../repository/PostRepository';
 import { CommentRepository } from '../repository/CommentRepository';
+import { SyncEventBus } from '../distributed/SyncEventBus';
 
 /**
  * 帖子业务层
@@ -10,6 +11,7 @@ import { CommentRepository } from '../repository/CommentRepository';
 export class PostService {
   private postRepository: PostRepository = new PostRepository();
   private commentRepository: CommentRepository = new CommentRepository();
+  private syncEventBus: SyncEventBus = SyncEventBus.getInstance();
 
   /**
    * 发布新帖子
@@ -48,6 +50,7 @@ export class PostService {
       post.updateTime = Date.now();
 
       await this.postRepository.insertPost(post);
+      this.syncEventBus.requestSync();
       console.info('[PostService] 发布帖子成功:', post.postId);
       return post;
     } catch (err) {
@@ -152,6 +155,9 @@ export class PostService {
 
       post.content = content;
       const rowCount: number = await this.postRepository.updatePost(post);
+      if (rowCount > 0) {
+        this.syncEventBus.requestSync();
+      }
       return rowCount > 0;
     } catch (err) {
       const errorMsg: string = (err as Error).message;
@@ -178,6 +184,9 @@ export class PostService {
         categoryId,
         categoryName
       );
+      if (rowCount > 0) {
+        this.syncEventBus.requestSync();
+      }
       return rowCount > 0;
     } catch (err) {
       const errorMsg: string = (err as Error).message;
@@ -200,6 +209,7 @@ export class PostService {
 
       const newLikeCount: number = post.likeCount + 1;
       await this.postRepository.updatePostLikeCount(postId, newLikeCount);
+      this.syncEventBus.requestSync();
       return newLikeCount;
     } catch (err) {
       const errorMsg: string = (err as Error).message;
@@ -222,6 +232,7 @@ export class PostService {
 
       const newLikeCount: number = Math.max(0, post.likeCount - 1);
       await this.postRepository.updatePostLikeCount(postId, newLikeCount);
+      this.syncEventBus.requestSync();
       return newLikeCount;
     } catch (err) {
       const errorMsg: string = (err as Error).message;
@@ -238,6 +249,9 @@ export class PostService {
   async deletePost(postId: string): Promise<boolean> {
     try {
       const rowCount: number = await this.postRepository.deletePost(postId);
+      if (rowCount > 0) {
+        this.syncEventBus.requestSync();
+      }
       console.info('[PostService] 删除帖子成功:', postId);
       return rowCount > 0;
     } catch (err) {
@@ -286,6 +300,7 @@ export class PostService {
     try {
       const count: number = await this.commentRepository.countCommentsByPost(postId);
       await this.postRepository.updatePostCommentCount(postId, count);
+      this.syncEventBus.requestSync();
     } catch (err) {
       const errorMsg: string = (err as Error).message;
       console.error('[PostService] 更新评论数失败:', errorMsg);

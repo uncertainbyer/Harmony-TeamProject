@@ -19,6 +19,10 @@
     {
       "name": "write_imagevideo_reason",
       "value": "用于将AI分类后的图片保存到相册"
+    },
+    {
+      "name": "distributed_datasync_reason",
+      "value": "用于发现并连接附近设备，同步帖子、图片和评论"
     }
   ]
 }

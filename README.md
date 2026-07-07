@@ -68,6 +68,9 @@ HarmonyOS 类社交媒体应用
 
 ## 🚀 快速开始
 
+分布式同步的架构、双真机连接与演示步骤见
+[`docs/distributed-sync.md`](docs/distributed-sync.md)。
+
 以下步骤将引导你在本地环境搭建并运行本项目。
 
 ### 前提条件
