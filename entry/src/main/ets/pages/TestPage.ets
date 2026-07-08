@@ -13,6 +13,7 @@ import {
 import { PostModel } from '../model/PostModel';
 import { CommentModel } from '../model/CommentModel';
 import { RemoteDataListener, SyncEventBus } from '../distributed/SyncEventBus';
+import { AIClassifyService } from '../service/AIClassifyService';
 
 @Entry
 @Component
@@ -97,16 +98,16 @@ struct TestPage {
       return;
     }
     try {
-      await this.postService.publishPost(
+      // 使用 AI 自动分类发布
+      const post: PostModel = await this.postService.publishPostWithAIClassify(
         'demo_user',
         '演示用户',
         '',
         this.postContent,
         this.selectedImages,
-        'cat_other',
-        '其他',
         this.distributedService.getLocalDeviceId()
       );
+      this.message = '发布成功！AI 分类: ' + post.categoryName;
       this.postContent = '';
       this.selectedImages = [];
       await this.loadPosts();

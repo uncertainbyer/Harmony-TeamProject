@@ -2,6 +2,7 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.Ab
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { DistributedService } from '../service/DistributedService';
+import { AIClassifyService } from '../service/AIClassifyService';
 
 const DOMAIN = 0x0000;
 
@@ -34,6 +35,16 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, 'SocialPhotoSync', 'Distributed sync init failed: %{public}s',
         (err as Error).message);
     }
+
+    // 预加载 AI 模型
+    try {
+      await AIClassifyService.getInstance().preloadModel(this.context);
+      hilog.info(DOMAIN, 'SocialPhotoAI', '%{public}s', 'AI model preloaded');
+    } catch (err) {
+      hilog.error(DOMAIN, 'SocialPhotoAI', 'AI model preload failed: %{public}s',
+        (err as Error).message);
+    }
+
     windowStage.loadContent('pages/TestPage', (err) => {
       if (err.code) {
         hilog.error(DOMAIN, 'testTag', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
