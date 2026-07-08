@@ -23,6 +23,10 @@
     {
       "name": "distributed_datasync_reason",
       "value": "用于发现并连接附近设备，同步帖子、图片和评论"
+    },
+    {
+      "name": "network_info_reason",
+      "value": "用于检测网络状态，在网络恢复时自动重连云服务器"
     }
   ]
 }

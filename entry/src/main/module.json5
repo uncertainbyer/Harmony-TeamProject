@@ -44,43 +44,46 @@
             "name": "ohos.extension.backup",
             "resource": "$profile:backup_config"
           }
-        ],
+        ]
       }
     ],
     "requestPermissions": [
-      {
-        "name": "ohos.permission.DISTRIBUTED_DATASYNC",
-        "reason": "$string:distributed_datasync_reason",
-        "usedScene": {
-          "abilities": [
-            "EntryAbility"
-          ],
-          "when": "inuse"
-        }
-      },
+      // ✅ 保留 — HTTP/WebSocket 连接云服务器的基础网络权限
       {
         "name": "ohos.permission.INTERNET"
       },
+
+      // ✅ 新增 — 获取网络状态，用于检测在线/离线切换
+      {
+        "name": "ohos.permission.GET_NETWORK_INFO",
+        "reason": "$string:network_info_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
+      },
+
+      // ✅ 保留 — 读取照片上传到云服务器
       {
         "name": "ohos.permission.READ_IMAGEVIDEO",
         "reason": "$string:read_imagevideo_reason",
         "usedScene": {
-          "abilities": [
-            "EntryAbility"
-          ],
+          "abilities": ["EntryAbility"],
           "when": "inuse"
         }
       },
+
+      // ✅ 保留 — 从云服务器下载保存照片
       {
         "name": "ohos.permission.WRITE_IMAGEVIDEO",
         "reason": "$string:write_imagevideo_reason",
         "usedScene": {
-          "abilities": [
-            "EntryAbility"
-          ],
+          "abilities": ["EntryAbility"],
           "when": "inuse"
         }
       }
-    ]
+
+    ],
+
   }
 }
