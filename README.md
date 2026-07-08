@@ -89,8 +89,8 @@ HarmonyOS 类社交媒体应用
     git clone https://github.com/你的用户名/你的仓库名.git
 2.  **打开项目**：
     启动 DevEco Studio，选择 Open，然后选中刚才克隆下来的项目文件夹。
-3.  **配置签名（如需要）**：
-    如需在真机上运行，请将签名文件放入 signature/ 目录，并修改 build-profile.json5 中的签名配置。
+3.  **配置签名**：
+    如需在真机上运行，请将签名文件放入 signature/ 目录，并修改 build-profile.json5 中的签名配置。或在文件->项目结构->签名配置中自动生成签名文件。
 4.  **同步依赖**：
     DevEco Studio 会自动同步项目依赖（位于 oh_modules/）。如未自动开始，可点击右上角的 Sync Now。
 5.  **运行项目**：
