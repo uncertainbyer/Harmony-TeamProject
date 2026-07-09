@@ -3,6 +3,9 @@ import { CategoryModel } from '../model/CategoryModel';
 import { PostRepository } from '../repository/PostRepository';
 import { CommentRepository } from '../repository/CommentRepository';
 import { SyncEventBus } from '../distributed/SyncEventBus';
+import { AIClassifyService, AIClassifyResult } from './AIClassifyService';
+import { image } from '@kit.ImageKit';
+import { fileIo } from '@kit.CoreFileKit';
 
 /**
  * 帖子业务层
@@ -332,6 +335,109 @@ export class PostService {
     } catch (err) {
       const errorMsg: string = (err as Error).message;
       console.error('[PostService] 标记同步失败:', errorMsg);
+    }
+  }
+
+  /**
+   * 发布带 AI 自动分类的帖子
+   *
+   * 先发布帖子，然后对第一张图片进行 AI 识别，自动更新分类。
+   * 若 AI 推理失败，帖子保持默认分类（"其他"）。
+   *
+   * @param userId 用户ID
+   * @param userName 用户昵称
+   * @param userAvatar 用户头像
+   * @param content 文字内容
+   * @param imagePaths 图片路径数组
+   * @param deviceId 设备ID
+   * @returns 新帖子对象（含 AI 分类结果）
+   */
+  async publishPostWithAIClassify(
+    userId: string,
+    userName: string,
+    userAvatar: string,
+    content: string,
+    imagePaths: string[],
+    deviceId: string
+  ): Promise<PostModel> {
+    // 先以默认分类发布
+    const post: PostModel = await this.publishPost(
+      userId,
+      userName,
+      userAvatar,
+      content,
+      imagePaths,
+      'cat_other',
+      '其他',
+      deviceId
+    );
+
+    // 如果有图片，运行 AI 分类
+    if (imagePaths.length > 0) {
+      try {
+        const classifyResult: AIClassifyResult =
+          await AIClassifyService.getInstance().classifyImageFromUri(imagePaths[0]);
+
+        if (classifyResult.success) {
+          await this.updatePostCategory(
+            post.postId,
+            classifyResult.categoryId,
+            classifyResult.categoryName
+          );
+          post.categoryId = classifyResult.categoryId;
+          post.categoryName = classifyResult.categoryName;
+          console.info('[PostService] AI 分类完成: ' +
+            classifyResult.categoryName + ' (' + classifyResult.confidence + '%)');
+        } else {
+          console.warn('[PostService] AI 分类失败，使用默认分类: ' + classifyResult.errorMsg);
+        }
+      } catch (err) {
+        const errorMsg: string = (err as Error).message;
+        console.warn('[PostService] AI 分类异常，使用默认分类: ' + errorMsg);
+      }
+    }
+
+    return post;
+  }
+
+  /**
+   * 对已有帖子重新进行 AI 分类
+   *
+   * @param postId 帖子ID
+   * @returns 分类结果，若帖子不存在或无图片则返回 null
+   */
+  async reclassifyPost(postId: string): Promise<AIClassifyResult | null> {
+    try {
+      const post: PostModel | null = await this.postRepository.queryPostById(postId);
+      if (post === null) {
+        console.error('[PostService] 帖子不存在: ' + postId);
+        return null;
+      }
+
+      const images: string[] = post.getImagePathArray();
+      if (images.length === 0) {
+        console.warn('[PostService] 帖子无图片，无法分类: ' + postId);
+        return null;
+      }
+
+      const classifyResult: AIClassifyResult =
+        await AIClassifyService.getInstance().classifyImageFromUri(images[0]);
+
+      if (classifyResult.success) {
+        await this.updatePostCategory(
+          postId,
+          classifyResult.categoryId,
+          classifyResult.categoryName
+        );
+        console.info('[PostService] 重新分类完成: ' +
+          classifyResult.categoryName + ' (' + classifyResult.confidence + '%)');
+      }
+
+      return classifyResult;
+    } catch (err) {
+      const errorMsg: string = (err as Error).message;
+      console.error('[PostService] 重新分类失败: ' + errorMsg);
+      return null;
     }
   }
 
