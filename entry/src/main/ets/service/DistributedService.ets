@@ -14,12 +14,14 @@ import {
 } from '../distributed/SyncProtocol';
 
 // ===== 枚举 =====
+
 export enum SyncConnectionState {
   IDLE = 0,
   CONNECTING = 1,
   CONNECTED = 2,
   SYNCING = 3,
-  ERROR = 4
+  ERROR = 4,
+  SYNCED
 }
 
 // ===== 状态类 =====

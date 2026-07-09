@@ -17,17 +17,33 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
-    DistributedService.getInstance().release().catch((err: Error) => {
-      hilog.error(DOMAIN, 'SocialPhotoSync', 'Failed to release sync service: %{public}s', err.message);
-    });
+    DistributedService.getInstance().release().catch(() => {});
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
-    this.initializeApplication(windowStage);
+    // ✅ 先加载页面（必须在 async 操作之前）
+    windowStage.loadContent('pages/TestPage', (err) => {
+      if (err.code) {
+        hilog.error(DOMAIN, 'testTag', '❌ 加载失败: %{public}s', JSON.stringify(err));
+        return;
+      }
+      hilog.info(DOMAIN, 'testTag', '✅ 页面加载成功');
+    });
+
+    // ✅ 后台初始化（不要阻塞页面加载）
+    this.initializeApplication().catch((err: Error) => {
+      hilog.error(DOMAIN, 'testTag', '❌ 初始化失败: %{public}s', err.message);
+    });
   }
 
-  private async initializeApplication(windowStage: window.WindowStage): Promise<void> {
+  private async initializeApplication(): Promise<void> {
+    try {
+      AppStorage.setOrCreate<object>('uiAbilityContext', this.context);
+    } catch (err) {
+      hilog.error(DOMAIN, 'testTag', 'AppStorage 存储失败: %{public}s', (err as Error).message);
+    }
+
     try {
       await DistributedService.getInstance().init(this.context);
       hilog.info(DOMAIN, 'SocialPhotoSync', '%{public}s', 'Distributed sync initialized');
@@ -36,7 +52,6 @@ export default class EntryAbility extends UIAbility {
         (err as Error).message);
     }
 
-    // 预加载 AI 模型
     try {
       await AIClassifyService.getInstance().preloadModel(this.context);
       hilog.info(DOMAIN, 'SocialPhotoAI', '%{public}s', 'AI model preloaded');
@@ -44,28 +59,17 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, 'SocialPhotoAI', 'AI model preload failed: %{public}s',
         (err as Error).message);
     }
-
-    windowStage.loadContent('pages/TestPage', (err) => {
-      if (err.code) {
-        hilog.error(DOMAIN, 'testTag', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
-        return;
-      }
-      hilog.info(DOMAIN, 'testTag', 'Succeeded in loading the content.');
-    });
   }
 
   onWindowStageDestroy(): void {
-    // Main window is destroyed, release UI related resources
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
   }
 
   onForeground(): void {
-    // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
   }
 
   onBackground(): void {
-    // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
   }
 }

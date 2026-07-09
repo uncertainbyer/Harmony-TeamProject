@@ -1,6 +1,6 @@
 {
   "src": [
     "pages/TestPage",
-    "pages/Index"
+    "pages/IndexPage"
   ]
 }
