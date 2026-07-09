@@ -1,951 +1,634 @@
-// SocialMediaMain.ets - 完整接入后端（界面样式完全不变）
-import { postApi, commentApi, aiClassifyApi } from '../api/IndexApi';
-import { Constants } from '../common/Constants';
-import { promptAction } from '@kit.ArkUI';
-import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import {
+  DistributedService,
+  SyncConnectionState,
+  DistributedSyncState,
+  SyncResult
+} from '../service/DistributedService';
+import { common } from '@kit.AbilityKit';
 
-interface TabItemType {
-  title: string;
-  icon: Resource;
-  selectedIcon: Resource;
-}
-
-interface FeedItemType {
-  id: number;
-  postId: string;
-  type: string;
-  url: string;
-  username: string;
-  avatar: string;
-  description: string;
-  likes: number;
-  comments: number;
-  isLiked?: boolean;
-  commentsList?: string[];
-  categoryId: string;
-  categoryName: string;
-}
-
-interface GeneratedObjectLiteralInterface_1 {
-  username: string;
-  avatar: string;
+// ⭐ 服务错误接口，替代 any
+interface ServiceError {
+  message: string;
+  name?: string;
+  code?: string;
 }
 
 @Entry
 @Component
-struct SocialMediaMain {
-  @State currentTabIndex: number = 0;
-  @State currentTitle: string = '首页';
-  @State showGlobalImagePreview: boolean = false;
-  @State previewImageUrl: string = '';
-  @State myWorks: Array<FeedItemType> = [];
-  @State feedData: Array<FeedItemType> = [];
-  @State isLoadingFeed: boolean = true;
-  @State loadError: string = '';
-
-  private currentFeedPage: number = 1;
-  private hasMoreFeed: boolean = true;
-  private tabBarHeight: number = 72;
-  private feedIdCounter: number = 1;
-
-  private tabItems: Array<TabItemType> = [
-    { title: '首页', icon: $r('app.media.home'), selectedIcon: $r('app.media.home_selected') },
-    { title: '分类', icon: $r('app.media.classify'), selectedIcon: $r('app.media.classify_selected') },
-    { title: '发布', icon: $r('app.media.publish'), selectedIcon: $r('app.media.publish_selected') },
-    { title: 'AI识图', icon: $r('app.media.ai'), selectedIcon: $r('app.media.ai_selected') },
-    { title: '我', icon: $r('app.media.me'), selectedIcon: $r('app.media.me_selected') }
-  ];
-
-  handleImageClick(imageUrl: string): void {
-    this.previewImageUrl = imageUrl;
-    this.showGlobalImagePreview = true;
-  }
-
-  private currentUser: GeneratedObjectLiteralInterface_1 = {
-    username: '我',
-    avatar: ''
+struct CloudSyncTest {
+  // ---- 表单状态 ----
+  @State username: string = '';
+  @State password: string = '';
+  // ---- 服务状态 ----
+  @State serviceStatus: string = '未初始化';
+  @State connectionStateText: string = '空闲';
+  @State lastMessage: string = '';
+  @State isLoggedIn: boolean = false;
+  @State userId: string = '';
+  // ---- 操作结果 ----
+  @State syncResultText: string = '';
+  @State uploadResultText: string = '';
+  @State logLines: string[] = [];
+  // ---- 控制 ----
+  @State isSyncing: boolean = false;
+  // ---- 错误提示相关状态 ----
+  @State loginError: string = '';
+  @State loginErrorType: string = '';
+  @State loginErrorCode: string = '';
+  @State showErrorBanner: boolean = false;
+  // 错误类型枚举
+  private readonly ERROR_TYPES: Record<string, string> = {
+    "NETWORK": '🌐 网络错误',
+    "AUTH": '🔐 认证错误',
+    "CERT": '📜 证书/签名错误',
+    "PARAM": '⚙️ 参数配置错误',
+    "TIMEOUT": '⏱️ 超时错误',
+    "SERVER": '🖥️ 服务器错误',
+    "UNKNOWN": '❓ 未知错误'
   };
+  private service: DistributedService = DistributedService.getInstance();
 
-  // ============ 生命周期 ============
+  aboutToAppear(): void {
+    this.addLog('页面加载，检查服务状态...');
 
-  async aboutToAppear(): Promise<void> {
-    aiClassifyApi.preload(null).catch((err: Error) => {
-      console.warn('[SocialMediaMain] AI预加载失败:', err.message);
-    });
-    await this.loadFeed(true);
+    if (this.service.isReady()) {
+      // 服务已就绪，正常执行
+      this.serviceStatus = '已就绪';
+      this.setupService();
+    } else {
+      // ⭐ 服务未就绪，检查是否有初始化错误信息
+      const initError: string | undefined = AppStorage.get<string>('init_error');
+      if (initError !== undefined && initError.length > 0) {
+        this.serviceStatus = '初始化失败: ' + initError;
+        this.addLog('❌ 初始化失败: ' + initError);
+      } else {
+        // ⭐ 后备方案：直接在页面中再次尝试初始化
+        this.addLog('服务未就绪，尝试在页面中初始化...');
+        this.retryInit();
+      }
+    }
   }
 
-  // ============ 加载 Feed ============
 
-  async loadFeed(refresh: boolean): Promise<void> {
-    if (this.isLoadingFeed) return;
-    this.isLoadingFeed = true;
-    this.loadError = '';
 
-    if (refresh) {
-      this.currentFeedPage = 1;
-      this.hasMoreFeed = true;
+  // ⭐ 新增：在页面中重试初始化
+  private async retryInit(): Promise<void> {
+    try {
+      const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+      await this.service.init(context);
+      this.serviceStatus = '已就绪';
+      this.addLog('✅ 页面中初始化成功');
+      this.setupService();
+    } catch (err) {
+      const error: Error = err as Error;
+      this.serviceStatus = '初始化失败: ' + error.message;
+      this.addLog('❌ 页面中初始化失败: ' + error.message);
     }
-    if (!this.hasMoreFeed && !refresh) {
-      this.isLoadingFeed = false;
+  }
+
+  // ⭐ 新增：提取公共的服务设置逻辑
+  private setupService(): void {
+    this.service.onStateChanged((state: DistributedSyncState): void => {
+      this.updateStatus(state);
+    });
+
+    let token: string | undefined = AppStorage.get<string>('cloud_sync_token');
+    if (token !== undefined && token.length > 0) {
+      this.isLoggedIn = true;
+      this.userId = AppStorage.get<string>('cloud_user_id') ?? '';
+      this.addLog('已恢复登录状态，用户ID: ' + this.userId);
+    } else {
+      this.addLog('未登录，请先登录');
+    }
+  }
+
+  private updateStatus(state: DistributedSyncState): void {
+    this.connectionStateText = this.stateToText(state.state);
+    this.lastMessage = state.lastMessage;
+    this.addLog('[状态] ' + this.connectionStateText + ' - ' + state.lastMessage);
+  }
+
+  private stateToText(state: SyncConnectionState): string {
+    switch (state) {
+      case SyncConnectionState.IDLE:
+        return '空闲';
+      case SyncConnectionState.CONNECTING:
+        return '连接中';
+      case SyncConnectionState.CONNECTED:
+        return '已连接';
+      case SyncConnectionState.SYNCING:
+        return '同步中';
+      case SyncConnectionState.ERROR:
+        return '错误';
+      default:
+        return '未知';
+    }
+  }
+
+  // ---- 智能错误分析（接收字符串参数，替代 any） ----
+  private analyzeLoginError(message: string, code?: string): void {
+    const errMsg: string = message || '';
+    const errCode: string = code || '';
+
+    this.loginError = errMsg;
+    this.loginErrorCode = errCode;
+
+    // 根据错误信息分类
+    if (errCode === '1001500001' || errMsg.includes('fingerprint') || errMsg.includes('指纹')) {
+      this.loginErrorType = this.ERROR_TYPES.CERT;
+      this.loginError = '证书指纹验证失败（错误码: 1001500001）\n'
+        + '🔍 请检查：\n'
+        + '  1. AGC后台是否配置了正确的SHA256证书指纹\n'
+        + '  2. 调试证书与发布证书的指纹是否分开配置\n'
+        + '  3. 配置后等待约30分钟缓存生效';
+    } else if (errCode === '1001502003' || errMsg.includes('client_id') || errMsg.includes('appId') ||
+      errMsg.includes('clientId')) {
+      this.loginErrorType = this.ERROR_TYPES.PARAM;
+      this.loginError = 'Client ID 配置错误（错误码: 1001502003）\n'
+        + '🔍 请检查：\n'
+        + '  1. module.json5 中的 client_id 与 AGC 后台是否一致\n'
+        + '  2. 注意不要有多余空格或特殊字符\n'
+        + '  3. app.json5 中的 app_id 是否配置正确';
+    } else if (errCode === '2300006' || errMsg.includes('resolve host') || errMsg.includes('域名解析')) {
+      this.loginErrorType = this.ERROR_TYPES.NETWORK;
+      this.loginError = '域名解析失败（错误码: 2300006）\n'
+        + '🔍 请检查：\n'
+        + '  1. 设备网络是否通畅（尝试切换WiFi/蜂窝网络）\n'
+        + '  2. 服务器域名是否可访问\n'
+        + '  3. 是否配置了网络代理需要调整';
+    } else if (errCode === '1001500003' || errMsg.includes('scope') || errMsg.includes('permission')) {
+      this.loginErrorType = this.ERROR_TYPES.AUTH;
+      this.loginError = '权限/Scope 不匹配（错误码: 1001500003）\n'
+        + '🔍 请检查：\n'
+        + '  1. AGC后台是否申请了对应的Scope权限\n'
+        + '  2. 个人开发者不支持"一键登录"功能\n'
+        + '  3. 元服务需设置 supportAtomicService: true';
+    } else if (errMsg.includes('timeout') || errMsg.includes('超时') || errCode === '401') {
+      this.loginErrorType = this.ERROR_TYPES.TIMEOUT;
+      this.loginError = '请求超时或参数错误（错误码: ' + (errCode || '401') + '）\n'
+        + '🔍 请检查：\n'
+        + '  1. 设备系统时间是否准确（误差超过5分钟会导致TLS握手失败）\n'
+        + '  2. 请求参数是否完整（如 loginRequest 未设置参数）\n'
+        + '  3. 网络连接是否稳定';
+    } else if (errMsg.includes('500') || errMsg.includes('502') || errMsg.includes('503')) {
+      this.loginErrorType = this.ERROR_TYPES.SERVER;
+      this.loginError = '服务器返回异常（HTTP ' + (errMsg.match(/\d{3}/)?.[0] || '未知') + '）\n'
+        + '🔍 请检查：\n'
+        + '  1. 服务器端日志是否有异常\n'
+        + '  2. Content-Type 请求头是否配置正确\n'
+        + '  3. 请求体格式是否服务端期望的格式';
+    } else if (errMsg.includes('certificate') || errMsg.includes('证书') || errMsg.includes('TLS')) {
+      this.loginErrorType = this.ERROR_TYPES.CERT;
+      this.loginError = '证书校验失败\n'
+        + '🔍 请检查：\n'
+        + '  1. 设备系统时间是否准确\n'
+        + '  2. 服务器TLS版本是否≥1.2\n'
+        + '  3. 企业证书是否已预置到设备信任链';
+    } else {
+      this.loginErrorType = this.ERROR_TYPES.UNKNOWN;
+      this.loginError = '未知登录错误\n'
+        + '详细信息: ' + errMsg + '\n'
+        + '错误码: ' + (errCode || '无') + '\n'
+        + '🔍 建议查看 hilog 日志获取更多信息';
+    }
+
+    // 显示错误横幅
+    this.showErrorBanner = true;
+
+    // 8秒后自动隐藏错误横幅
+    setTimeout(() => {
+      this.showErrorBanner = false;
+    }, 8000);
+  }
+
+  // ---- 关闭错误提示 ----
+  private dismissError(): void {
+    this.showErrorBanner = false;
+    this.loginError = '';
+    this.loginErrorType = '';
+    this.loginErrorCode = '';
+  }
+
+  // ---- 操作 ----
+
+  private async doLogin(): Promise<void> {
+    if (this.username.length === 0 || this.password.length === 0) {
+      this.addLog('❌ 请输入用户名和密码');
       return;
     }
+    this.addLog('🔄 正在登录...');
+    // 登录前清除之前的错误
+    this.dismissError();
 
-    const result = await postApi.getList(this.currentFeedPage, Constants.PAGE_SIZE);
-    if (result.success && result.data !== null) {
-      const newItems: FeedItemType[] = [];
-      for (let i = 0; i < result.data.length; i++) {
-        const post = result.data[i];
-        const images = post.getImagePathArray();
-        const item: FeedItemType = {
-          id: this.feedIdCounter++,
-          postId: post.postId,
-          type: 'image',
-          url: images.length > 0 ? images[0] : '',
-          username: post.userName,
-          avatar: post.userAvatar,
-          description: post.content,
-          likes: post.likeCount,
-          comments: post.commentCount,
-          isLiked: false,
-          commentsList: [''],
-          categoryId: post.categoryId,
-          categoryName: post.categoryName,
-        };
-        // 从后端加载已有评论
-        const commentResult = await commentApi.getAllByPost(post.postId);
-        if (commentResult.success && commentResult.data !== null) {
-          const texts: string[] = [];
-          for (let j = 0; j < commentResult.data.length; j++) {
-            texts.push(commentResult.data[j].content);
-          }
-          item.commentsList = texts.length > 0 ? texts : [''];
-        }
-        newItems.push(item);
+    try {
+      let success: boolean = await this.service.login(this.username, this.password);
+      if (success) {
+        this.isLoggedIn = true;
+        this.userId = this.service.getLocalDeviceId();
+        this.addLog('✅ 登录成功！用户ID: ' + this.userId);
+      } else {
+        // login 返回 false 但没有抛异常时的处理
+        this.analyzeLoginError('服务返回登录失败，但无详细错误信息');
+        this.addLog('❌ 登录失败（无详细错误）');
       }
-      this.feedData = refresh ? newItems : [...this.feedData, ...newItems];
-      this.hasMoreFeed = newItems.length >= Constants.PAGE_SIZE;
-      if (this.hasMoreFeed) this.currentFeedPage++;
-    } else {
-      this.loadError = result.message;
+    } catch (err) {
+      const serviceErr: ServiceError = err as ServiceError;
+
+      // ⭐ 增强：把原始 err 的完整信息输出到日志
+      this.addLog('❌ 登录异常 - 原始信息:');
+      this.addLog('  message: ' + serviceErr.message);
+      this.addLog('  code: ' + (serviceErr.code || '无'));
+      this.addLog('  name: ' + (serviceErr.name || '无'));
+      this.addLog('  toString: ' + String(err));
+      this.addLog('  JSON: ' + JSON.stringify(err));
+
+      this.analyzeLoginError(serviceErr.message, serviceErr.code);
     }
-    this.isLoadingFeed = false;
   }
 
-  // ============ 发布帖子 ============
+  private async doLogout(): Promise<void> {
+    this.addLog('🔄 正在退出...');
+    await this.service.logout();
+    this.isLoggedIn = false;
+    this.userId = '';
+    this.username = '';
+    this.password = '';
+    this.dismissError(); // 退出时清除错误
+    this.addLog('✅ 已退出登录');
+  }
 
-  async handlePublish(description: string, imageUrl: string): Promise<void> {
-    const userId = AppStorage.get<string>('user_id') || 'local_user';
-    const deviceId = AppStorage.get<string>('device_id') || 'local_device';
-    const imagePaths: string[] = imageUrl.length > 0 ? [imageUrl] : [];
+  private async doSync(): Promise<void> {
+    if (!this.isLoggedIn) {
+      this.addLog('❌ 请先登录');
+      return;
+    }
+    this.isSyncing = true;
+    this.syncResultText = '同步中...';
+    this.addLog('🔄 开始同步...');
+    try {
+      let result: SyncResult = await this.service.syncNow(true);
+      if (result.success) {
+        this.syncResultText = '✅ 同步成功，共处理 ' + result.syncCount + ' 条数据';
+        this.addLog('✅ 同步成功，共处理 ' + result.syncCount + ' 条数据');
+      } else {
+        this.syncResultText = '❌ 同步失败: ' + result.errorMsg;
+        this.addLog('❌ 同步失败: ' + result.errorMsg);
+      }
+    } catch (err) {
+      const error: Error = err as Error;
+      this.syncResultText = '❌ 同步异常: ' + error.message;
+      this.addLog('❌ 同步异常: ' + error.message);
+    }
+    this.isSyncing = false;
+  }
 
-    const result = await postApi.publishWithAI(
-      userId, this.currentUser.username, this.currentUser.avatar,
-      description, imagePaths, deviceId
-    );
+  private async doUploadTest(): Promise<void> {
+    if (!this.isLoggedIn) {
+      this.addLog('❌ 请先登录');
+      return;
+    }
+    this.uploadResultText = '上传中...';
+    this.addLog('🔄 测试图片上传（模拟）...');
+    try {
+      let testUris: string[] = [];
+      let result: string[] = await this.service.uploadImages(testUris);
+      this.uploadResultText = '✅ 上传完成，返回 ' + result.length + ' 个URL';
+      this.addLog('✅ 上传完成');
+    } catch (err) {
+      const error: Error = err as Error;
+      this.uploadResultText = '❌ 上传失败: ' + error.message;
+      this.addLog('❌ 上传失败: ' + error.message);
+    }
+  }
 
-    if (result.success && result.data !== null) {
-      const post = result.data;
-      const images = post.getImagePathArray();
-      const newPost: FeedItemType = {
-        id: this.feedIdCounter++,
-        postId: post.postId,
-        type: 'image',
-        url: images.length > 0 ? images[0] : '',
-        username: this.currentUser.username,
-        avatar: this.currentUser.avatar,
-        description: description || '分享我的生活',
-        likes: 0,
-        comments: 0,
-        isLiked: false,
-        commentsList: [''],
-        categoryId: post.categoryId,
-        categoryName: post.categoryName,
-      };
+  private clearLog(): void {
+    this.logLines = [];
+    this.syncResultText = '';
+    this.uploadResultText = '';
+  }
 
-      this.feedData = [newPost, ...this.feedData];
-      this.myWorks = [newPost, ...this.myWorks];
-      this.currentTabIndex = 0;
-      this.currentTitle = '首页';
+  private addLog(msg: string): void {
+    let time: string = new Date().toLocaleTimeString();
+    this.logLines.push('[' + time + '] ' + msg);
+    if (this.logLines.length > 100) {
+      this.logLines.shift();
     }
   }
 
   build() {
     Stack() {
-      Column() {
-        Stack() {
-          if (this.currentTabIndex === 0) {
-            if (this.isLoadingFeed && this.feedData.length === 0) {
-              Column() {
-                LoadingProgress().width(40).height(40)
-                Text('加载中...').fontSize(14).fontColor('#999999').margin({ top: 10 })
-              }.width('100%').height('100%').justifyContent(FlexAlign.Center)
-            } else if (this.loadError.length > 0 && this.feedData.length === 0) {
-              Column() {
-                Text('加载失败').fontSize(14).fontColor('#FF0000').margin({ bottom: 10 })
-                Button('重试').width(100).height(36).fontSize(14)
-                  .onClick(() => { this.loadFeed(true); })
-              }.width('100%').height('100%').justifyContent(FlexAlign.Center)
-            } else {
-              FeedList({
-                feedData: this.feedData,
-                onImageClick: (url: string): void => this.handleImageClick(url),
-                hasMore: this.hasMoreFeed,
-                onLoadMore: (): void => { this.loadFeed(false); }
-              })
-            }
-          }
-          if (this.currentTabIndex === 1) {
-            CategoryView()
-          }
-          if (this.currentTabIndex === 2) {
-            PublishView({
-              onPublish: (description: string, imageUrl: string): void => {
-                this.handlePublish(description, imageUrl);
-              }
-            })
-          }
-          if (this.currentTabIndex === 3) {
-            AICameraView()
-          }
-          if (this.currentTabIndex === 4) {
-            ProfileView({ myWorks: this.myWorks })
-          }
-        }
-        .layoutWeight(1)
-
-        Row() {
-          ForEach(this.tabItems, (item: TabItemType, index: number) => {
-            Column() {
-              Image(this.currentTabIndex === index ? item.selectedIcon : item.icon)
-                .width(28).height(28).objectFit(ImageFit.Contain).margin({ bottom: 2 })
-              Text(item.title)
-                .fontSize(11)
-                .fontColor(this.currentTabIndex === index ? '#FFD700' : '#AAAAAA')
-                .fontWeight(this.currentTabIndex === index ? FontWeight.Medium : FontWeight.Normal)
-            }
-            .width('20%').height(this.tabBarHeight)
-            .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-            .onClick(() => {
-              this.currentTabIndex = index;
-              this.currentTitle = item.title;
-            })
-          })
-        }
-        .width('100%').height(this.tabBarHeight)
-        .backgroundColor('#1A1A2E').padding({ top: 6, bottom: 6 })
-      }
-      .width('100%').height('100%').backgroundColor('#F5F5F5')
-
-      if (this.showGlobalImagePreview) {
-        Stack() {
-          Column()
-            .width('100%').height('100%')
-            .backgroundColor('rgba(0, 0, 0, 0.9)')
-            .onClick(() => { this.showGlobalImagePreview = false; })
-          Image(this.previewImageUrl)
-            .width('90%').height('70%')
-            .objectFit(ImageFit.Contain).borderRadius(8)
-          Text('✕')
-            .fontSize(30).fontColor(Color.White)
-            .position({ x: '90%', y: '5%' })
-            .onClick(() => { this.showGlobalImagePreview = false; })
-        }
-        .width('100%').height('100%').position({ x: 0, y: 0 }).zIndex(999)
-      }
-    }
-    .width('100%').height('100%')
-  }
-}
-
-// ================== 首页 - FeedList ==================
-
-@Component
-struct FeedList {
-  @Prop feedData: Array<FeedItemType> = [];
-  onImageClick: (url: string) => void = () => {};
-  hasMore: boolean = false;
-  onLoadMore?: () => void;
-
-  build() {
-    List() {
-      ForEach(this.feedData, (item: FeedItemType) => {
-        ListItem() {
-          FeedItem({ feed: item, onImageClick: this.onImageClick })
-        }
-        .margin({ bottom: 10 })
-      })
-      if (this.hasMore) {
-        ListItem() {
-          Row() {
-            LoadingProgress().width(24).height(24).margin({ right: 8 })
-            Text('加载更多...').fontSize(14).fontColor('#999999')
-          }
-          .width('100%').height(50).justifyContent(FlexAlign.Center)
-          .onAppear(() => { if (this.onLoadMore) this.onLoadMore(); })
-        }
-      }
-    }
-    .width('100%').height('100%')
-    .padding({ left: 12, right: 12, top: 10 })
-    .backgroundColor('#F5F5F5')
-  }
-}
-
-// ================== 单条 FeedItem ==================
-
-@Component
-struct FeedItem {
-  @Prop feed: FeedItemType = {
-    id: 0, postId: '', type: 'image', url: '', username: '', avatar: '',
-    description: '', likes: 0, comments: 0, isLiked: false, commentsList: [''],
-    categoryId: '', categoryName: ''
-  };
-  onImageClick: (url: string) => void = () => {};
-  @State isLiked: boolean = false;
-  @State likeCount: number = 0;
-  @State showCommentInput: boolean = false;
-  @State commentText: string = '';
-  @State commentsList: string[] = [];
-  @State isSending: boolean = false;
-
-  aboutToAppear(): void {
-    this.isLiked = this.feed.isLiked || false;
-    this.likeCount = this.feed.likes;
-
-    const sourceList: string[] = this.feed.commentsList ?? [''];
-    const filtered: string[] = [];
-    for (let i = 0; i < sourceList.length; i++) {
-      if (sourceList[i].length > 0) {
-        filtered.push(sourceList[i]);
-      }
-    }
-    this.commentsList = filtered;
-  }
-
-  async handleLikeClick(): Promise<void> {
-    if (this.feed.postId.length === 0) {
-      this.isLiked = !this.isLiked;
-      this.likeCount = this.isLiked ? this.likeCount + 1 : this.likeCount - 1;
-      return;
-    }
-    const result = this.isLiked
-      ? await postApi.unlike(this.feed.postId)
-      : await postApi.like(this.feed.postId);
-    if (result.success && result.data !== null) {
-      this.isLiked = !this.isLiked;
-      this.likeCount = result.data;
-    }
-  }
-
-  async handleSendComment(): Promise<void> {
-    const trimmed = this.commentText.trim();
-    if (trimmed.length === 0) return;
-    this.isSending = true;
-
-    if (this.feed.postId.length === 0) {
-      this.commentsList = [...this.commentsList, trimmed];
-      this.commentText = '';
-      this.isSending = false;
-      return;
-    }
-
-    const userId = AppStorage.get<string>('user_id') || 'local_user';
-    const deviceId = AppStorage.get<string>('device_id') || 'local_device';
-    const result = await commentApi.publish(
-      this.feed.postId, userId, '我', '', trimmed, deviceId
-    );
-    if (result.success) {
-      this.commentsList = [...this.commentsList, trimmed];
-      this.commentText = '';
-    }
-    this.isSending = false;
-  }
-
-  /** 获取可显示的图片源 */
-  private getImageSrc(): string | Resource {
-    if (this.feed.url.length > 0) return this.feed.url;
-    return $r('app.media.nai');
-  }
-
-  private getAvatarSrc(): string | Resource {
-    if (this.feed.avatar.length > 0) return this.feed.avatar;
-    return $r('app.media.nai');
-  }
-
-  build() {
-    Column() {
-      Row() {
-        Image(this.getAvatarSrc())
-          .width(44).height(44).borderRadius(22).margin({ right: 12 })
+      Scroll() {
         Column() {
-          Text(this.feed.username)
-            .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#333333')
-          Text('2小时前')
-            .fontSize(12).fontColor('#999999')
-        }
-        .alignItems(HorizontalAlign.Start)
-        Blank()
-      }
-      .width('100%').padding({ left: 12, right: 12, top: 12 })
+          // ---- 标题 ----
+          Text('☁️ 分布式云同步测试')
+            .fontSize(22)
+            .fontWeight(700)
+            .margin({ top: 20, bottom: 16 });
 
-      Text(this.feed.description)
-        .fontSize(15).fontColor('#444444')
-        .padding({ left: 12, right: 12, top: 8 }).width('100%')
+          // ---- 状态面板 ----
+          Column() {
+            Text('系统状态')
+              .fontSize(16)
+              .fontWeight(600)
+              .width('100%');
 
-      Stack() {
-        if (this.feed.type === 'image') {
-          Image(this.getImageSrc())
-            .width('100%').height(200).objectFit(ImageFit.Cover)
-            .borderRadius(8).margin({ top: 8 }).backgroundColor('#E0E0E0')
-            .onClick(() => { this.onImageClick(this.feed.url); })
-        } else {
-          Image(this.getImageSrc())
-            .width('100%').height(200).objectFit(ImageFit.Cover)
-            .borderRadius(8).margin({ top: 8 }).backgroundColor('#1A1A2E')
-            .onClick(() => { this.onImageClick(this.feed.url); })
-          Image($r('app.media.background'))
-            .width(48).height(48)
-            .position({ x: '50%', y: '50%' })
-            .translate({ x: -24, y: -24 })
-            .fillColor(Color.White)
-        }
-      }
+            Row() {
+              Text('服务状态:')
+                .fontSize(14)
+                .width(90);
+              Text(this.serviceStatus)
+                .fontSize(14)
+                .fontColor(this.serviceStatus === '已就绪' ? Color.Green : Color.Orange);
+            }.width('100%').margin({ top: 4 });
 
-      Row() {
-        Row() {
-          Image(this.isLiked ? $r('app.media.good_selected') : $r('app.media.good'))
-            .width(20).height(20).fillColor('#FF6B6B')
-          Text(this.likeCount.toString())
-            .fontSize(13).fontColor(this.isLiked ? '#FF0000' : '#666666').margin({ left: 4 })
-        }
-        .margin({ right: 16 })
-        .onClick(() => { this.handleLikeClick(); })
+            Row() {
+              Text('连接状态:')
+                .fontSize(14)
+                .width(90);
+              Text(this.connectionStateText)
+                .fontSize(14)
+                .fontColor(this.connectionStateText === '已连接' ? Color.Green : Color.Gray);
+            }.width('100%').margin({ top: 4 });
 
-        Row() {
-          Image($r('app.media.comment'))
-            .width(20).height(20).fillColor('#666666')
-          Text(this.commentsList.length.toString())
-            .fontSize(13).fontColor('#666666').margin({ left: 4 })
-        }
-        .onClick(() => {
-          this.showCommentInput = !this.showCommentInput;
-          if (!this.showCommentInput) this.commentText = '';
-        })
+            Row() {
+              Text('登录状态:')
+                .fontSize(14)
+                .width(90);
+              Text(this.isLoggedIn ? '✅ 已登录' : '❌ 未登录')
+                .fontSize(14)
+                .fontColor(this.isLoggedIn ? Color.Green : Color.Red);
+            }.width('100%').margin({ top: 4 });
 
-        Blank()
-      }
-      .width('100%').padding({ left: 12, right: 12, top: 10, bottom: 12 })
-      .backgroundColor(Color.White)
-
-      if (this.showCommentInput) {
-        Column() {
-          if (this.commentsList.length > 0) {
-            Column() {
-              Text('评论列表 (' + this.commentsList.length + ')')
-                .fontSize(14).fontWeight(FontWeight.Medium).fontColor('#333333')
-                .width('100%').margin({ bottom: 8 })
-              ForEach(this.commentsList, (comment: string, index: number) => {
-                Row() {
-                  Text((index + 1) + '. ')
-                    .fontSize(13).fontColor('#999999')
-                  Text(comment)
-                    .fontSize(14).fontColor('#333333')
-                }
-                .width('100%').padding({ top: 4, bottom: 4 }).margin({ bottom: 4 })
-              })
+            if (this.isLoggedIn) {
+              Row() {
+                Text('用户ID:')
+                  .fontSize(14)
+                  .width(90);
+                Text(this.userId)
+                  .fontSize(12)
+                  .fontColor(Color.Blue);
+              }.width('100%').margin({ top: 4 });
             }
-            .width('100%').padding({ bottom: 12 })
-          } else {
-            Text('暂无评论，来说点什么吧...')
-              .fontSize(14).fontColor('#999999').width('100%')
-              .padding({ bottom: 12 }).textAlign(TextAlign.Center)
-          }
 
-          Row() {
-            TextInput({ placeholder: '说点什么...', text: this.commentText })
-              .width('75%').height(40).backgroundColor('#F5F5F5').borderRadius(20)
-              .padding({ left: 16, right: 16 }).fontSize(14).placeholderColor('#AAAAAA')
-              .onChange((value: string) => { this.commentText = value; })
-
-            Button(this.isSending ? '发送中' : '发送')
-              .width('20%').height(40)
-              .backgroundColor(this.isSending ? '#CCCCCC' : '#FFD700')
-              .fontColor('#1A1A2E').borderRadius(20).fontSize(14).fontWeight(FontWeight.Medium)
-              .enabled(!this.isSending)
-              .onClick(() => { this.handleSendComment(); })
-          }
-          .width('100%').justifyContent(FlexAlign.SpaceBetween)
-          .padding({ top: 8, bottom: 8 })
-        }
-        .width('100%').padding({ left: 12, right: 12, bottom: 12 })
-        .backgroundColor('#FAFAFA')
-        .borderRadius({ bottomLeft: 12, bottomRight: 12 })
-      }
-    }
-    .width('100%').backgroundColor(Color.White).borderRadius(12)
-    .shadow({ radius: 4, color: 'rgba(0, 0, 0, 0.05)', offsetX: 0, offsetY: 2 })
-  }
-}
-
-// ================== AI识图Tab ==================
-
-@Component
-struct AICameraView {
-  @State recognizeResult: string = '';
-  @State recognizeDetail: string = '';
-  @State isRecognizing: boolean = false;
-
-  /**
-   * 从相册选择一张图片 → AI 识别
-   */
-  async recognizeFromAlbum(): Promise<void> {
-    this.isRecognizing = true;
-    this.recognizeResult = '正在打开相册...';
-
-    try {
-      const context = getContext(this);
-      const phAccessHelper = photoAccessHelper.getPhotoAccessHelper(context);
-      const picker = new photoAccessHelper.PhotoViewPicker();
-
-      // 构造选择选项（ArkTS 严格模式：用类实例代替对象字面量）
-      const options = new photoAccessHelper.PhotoSelectOptions();
-      options.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE;
-      options.maxSelectNumber = 1;
-
-      const result = await picker.select(options);
-      const uris: string[] = result.photoUris;
-
-      if (uris.length > 0) {
-        const uri: string = uris[0];
-        await this.runClassify(uri);
-      } else {
-        this.isRecognizing = false;
-        this.recognizeResult = '';
-        this.recognizeDetail = '';
-      }
-    } catch (err) {
-      this.isRecognizing = false;
-      this.recognizeResult = '';
-      this.recognizeDetail = '';
-      console.error('[AICameraView] 选择图片失败:', (err as Error).message);
-    }
-  }
-
-  /**
-   * 调用 AI 识别接口
-   */
-  async runClassify(imageUri: string): Promise<void> {
-    this.recognizeResult = 'AI 识别中...';
-    this.recognizeDetail = '';
-
-    try {
-      // ✅ 改为 const result = await ...（让 ArkTS 自动推断类型）
-      const result = await aiClassifyApi.classifyUri(imageUri);
-      if (result.success && result.data !== null) {
-        const r = result.data;
-        this.recognizeResult = r.categoryName + ' (' + r.confidence + '%)';
-        this.recognizeDetail = r.success ? 'AI 推理成功' : 'AI 推理失败';
-      } else {
-        this.recognizeResult = '识别失败';
-        this.recognizeDetail = result.message;
-      }
-    } catch (err) {
-      this.recognizeResult = '识别异常';
-      this.recognizeDetail = (err as Error).message;
-    }
-
-    this.isRecognizing = false;
-  }
-
-  build() {
-    Column() {
-      Stack() {
-        Image($r('app.media.background'))
-          .width('90%').height(300).borderRadius(16)
-          .backgroundColor('#2D2D44').objectFit(ImageFit.Cover)
-        Column() {
-          Text('🔍').fontSize(50).margin({ bottom: 10 })
-          if (this.recognizeResult.length > 0) {
-            Text(this.recognizeResult)
-              .fontSize(18).fontColor('#FFD700').fontWeight(FontWeight.Bold)
-            Text(this.recognizeDetail)
-              .fontSize(13).fontColor('rgba(255,255,255,0.7)').margin({ top: 6 })
-          } else {
-            Text('对准物体，AI将自动识别')
-              .fontSize(16).fontColor(Color.White).fontWeight(FontWeight.Medium)
-            Text('支持植物、动物、商品等')
-              .fontSize(13).fontColor('rgba(255,255,255,0.7)').margin({ top: 6 })
-          }
-          if (this.isRecognizing) {
-            LoadingProgress().width(40).height(40).margin({ top: 12 })
-          }
-        }
-        .width('100%').height('100%')
-        .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-      }
-      .width('100%').height(300).padding({ top: 20, bottom: 20 })
-
-      Row() {
-        Button('相册选择')
-          .width(120).height(44).backgroundColor('#FFD700')
-          .fontColor('#1A1A2E').borderRadius(22).fontSize(15).fontWeight(FontWeight.Medium)
-          .enabled(!this.isRecognizing)
-          .onClick(() => { this.recognizeFromAlbum(); })
-        Button('拍照识别')
-          .width(120).height(44).backgroundColor('#1A1A2E')
-          .fontColor(Color.White).borderRadius(22).fontSize(15).fontWeight(FontWeight.Medium)
-          .margin({ left: 20 }).enabled(!this.isRecognizing)
-          .onClick(() => { promptAction.showToast({ message: '请拍照后自动识别', duration: 2000 }); })
-      }
-
-      Column() {
-        Text('最近识别')
-          .fontSize(16).fontWeight(FontWeight.Medium)
-          .fontColor('#333333').width('90%')
-          .margin({ top: 24, bottom: 10 })
-        if (this.recognizeResult.length > 0) {
-          Row() {
-            Text(this.recognizeResult)
-              .fontSize(14).fontColor('#FF9800').fontWeight(FontWeight.Medium)
-          }
-          .width('90%').margin({ top: 4 })
-        } else {
-          Text('点击上方「相册选择」按钮，选择一张图片进行 AI 识别')
-            .fontSize(13).fontColor('#999999').width('90%').textAlign(TextAlign.Center)
-        }
-      }
-      .width('100%').alignItems(HorizontalAlign.Center)
-
-      Blank()
-    }
-    .width('100%').height('100%').backgroundColor('#F8F8FC')
-  }
-}
-
-// ================== 发布Tab ==================
-
-@Component
-struct PublishView {
-  @State description: string = '';
-  @State selectedImage: string = '';
-  @State hasSelectedImage: boolean = false;
-  @State isPressed1: boolean = false;
-  @State isPressed2: boolean = false;
-  @State isPublishing: boolean = false;
-  onPublish: (description: string, imageUrl: string) => void = () => {};
-
-  build() {
-    Column() {
-      Column() {
-        Column() {
-          TextArea({ placeholder: '分享你的想法...', text: this.description })
-            .width('100%').height(120).backgroundColor('#F5F5F5').borderRadius(12)
-            .padding(12).fontSize(16).placeholderColor('#AAAAAA')
-            .onChange((value: string) => { this.description = value; })
-        }
-        .width('90%').margin({ top: 20 })
-
-        Row() {
-          Stack() {
-            if (this.hasSelectedImage) {
-              Image(this.selectedImage)
-                .width(80).height(80).borderRadius(8).objectFit(ImageFit.Cover)
-            } else {
-              Column() {
-                Text('+').fontSize(30).fontColor('#FFFFFF').fontWeight(FontWeight.Bold)
-                Text('添加图片').fontSize(12).fontColor('#FFFFFF').margin({ top: 4 })
-              }
-              .width(80).height(80).backgroundColor('#D0D0D0').borderRadius(8)
-              .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-            }
-          }
-          .margin({ right: 10 })
-          .onClick(() => { this.hasSelectedImage = !this.hasSelectedImage; })
-        }
-        .width('90%').justifyContent(FlexAlign.Start).margin({ top: 16 })
-
-        Row() {
-          Button({ type: ButtonType.Circle }).width(20).height(20)
-            .backgroundColor(this.isPressed1 ? '#FF0000' : '#FFD700')
-            .onClick(() => { this.isPressed1 = !this.isPressed1; })
-          Text('添加位置').fontSize(15).fontColor('#666666').margin({ left: 8 })
-          Blank()
-          Button({ type: ButtonType.Circle }).width(20).height(20)
-            .backgroundColor(this.isPressed2 ? '#FF0000' : '#FFD700')
-            .onClick(() => { this.isPressed2 = !this.isPressed2; })
-          Text('公开').fontSize(15).fontColor('#666666').margin({ left: 8 })
-        }
-        .width('90%').padding({ top: 16, bottom: 16 })
-        .borderWidth({ bottom: 1 }).borderColor('#EEEEEE')
-
-        Button(this.isPublishing ? '发布中...' : '发布')
-          .width('90%').height(50)
-          .backgroundColor(this.isPublishing ? '#CCCCCC' : '#FFD700')
-          .fontColor('#1A1A2E').fontSize(18).fontWeight(FontWeight.Bold)
-          .borderRadius(25).margin({ top: 24 })
-          .enabled(!this.isPublishing)
-          .onClick(() => {
-            if (this.description.trim().length === 0) {
-              promptAction.showToast({ message: '请输入内容', duration: 2000 });
-              return;
-            }
-            this.isPublishing = true;
-            this.onPublish(this.description, this.selectedImage);
-            this.description = '';
-            this.hasSelectedImage = false;
-            this.selectedImage = '';
-            this.isPublishing = false;
-          })
-      }
-      .width('100%').backgroundColor(Color.White)
-      .borderRadius({ topLeft: 20, topRight: 20 })
-      .shadow({ radius: 8, color: 'rgba(0, 0, 0, 0.06)', offsetY: -4 })
-      .padding({ bottom: 20 })
-
-      Blank()
-    }
-    .width('100%').height('100%').backgroundColor('#F8F8FC')
-  }
-}
-
-// ================== 分类Tab ==================
-
-interface CategoryItemType {
-  name: string;
-  icon: string;
-  categoryId: string;
-}
-
-interface PhotoItemType {
-  id: number;
-  image: string;
-  postId: string;
-}
-
-interface HotTagType {
-  tag: string;
-  category: string;
-  categoryId: string;
-}
-
-@Component
-struct CategoryView {
-  @State selectedCategory: string = '';
-  @State showPhotos: boolean = false;
-  @State currentPhotos: Array<PhotoItemType> = [];
-  @State isLoadingCategory: boolean = false;
-
-  private categories: Array<CategoryItemType> = [
-    { name: '风景', icon: '🌲', categoryId: 'cat_scenery' },
-    { name: '人物', icon: '👤', categoryId: 'cat_person' },
-    { name: '美食', icon: '🍽', categoryId: 'cat_food' },
-    { name: '动物', icon: '🐾', categoryId: 'cat_animal' },
-    { name: '建筑', icon: '🏛', categoryId: 'cat_building' },
-    { name: '其他', icon: '📁', categoryId: 'cat_other' },
-  ];
-
-  private hotTags: HotTagType[] = [
-    { tag: '#城市记忆', category: '人物', categoryId: 'cat_person' },
-    { tag: '#美食探店', category: '美食', categoryId: 'cat_food' },
-    { tag: '#旅行日记', category: '风景', categoryId: 'cat_scenery' },
-    { tag: '#摄影日常', category: '风景', categoryId: 'cat_scenery' },
-    { tag: '#宠物生活', category: '动物', categoryId: 'cat_animal' },
-    { tag: '#时尚穿搭', category: '人物', categoryId: 'cat_person' },
-  ];
-
-  async handleCategoryClick(name: string, categoryId: string): Promise<void> {
-    this.selectedCategory = name;
-    this.showPhotos = true;
-    this.isLoadingCategory = true;
-
-    const result = await postApi.getByCategory(categoryId, 1, 30);
-    if (result.success && result.data !== null) {
-      const photos: PhotoItemType[] = [];
-      for (let i = 0; i < result.data.length; i++) {
-        const images = result.data[i].getImagePathArray();
-        if (images.length > 0) {
-          photos.push({
-            id: i + 1,
-            image: images[0],
-            postId: result.data[i].postId,
-          });
-        }
-      }
-      this.currentPhotos = photos;
-    }
-    this.isLoadingCategory = false;
-  }
-
-  handleTagClick(tag: HotTagType): void {
-    this.handleCategoryClick(tag.category, tag.categoryId);
-  }
-
-  build() {
-    Column() {
-      if (!this.showPhotos) {
-        Grid() {
-          ForEach(this.categories, (cat: CategoryItemType) => {
-            GridItem() {
-              Column() {
-                Text(cat.icon).fontSize(32).margin({ bottom: 8 })
-                Text(cat.name).fontSize(14).fontColor('#333333')
-              }
-              .width('100%').height(100)
-              .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-              .onClick(() => { this.handleCategoryClick(cat.name, cat.categoryId); })
-            }
-          })
-        }
-        .columnsTemplate('1fr 1fr 1fr')
-        .rowsGap(12).columnsGap(12)
-        .width('90%').height(220).padding(8)
-
-        Column() {
-          Text('热门标签')
-            .fontSize(20).fontWeight(FontWeight.Medium)
-            .fontColor('#1A1A2E').width('100%')
-            .margin({ top: 20, bottom: 12 })
-
-          Row() {
-            ForEach(this.hotTags, (tagItem: HotTagType) => {
-              Text(tagItem.tag)
-                .fontSize(13).fontColor('#666666')
-                .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-                .backgroundColor('#F0F0F0').borderRadius(16)
-                .margin({ right: 8, bottom: 8 })
-                .onClick(() => { this.handleTagClick(tagItem); })
-            })
+            Text('最新消息: ' + this.lastMessage)
+              .fontSize(12)
+              .fontColor(Color.Gray)
+              .margin({ top: 6 });
           }
           .width('100%')
-        }
-        .width('100%').alignItems(HorizontalAlign.Start)
-        Blank()
-      } else {
-        Column() {
-          Row() {
-            Text('← 返回')
-              .fontSize(15).fontColor('#FFD700')
-              .onClick(() => { this.showPhotos = false; this.selectedCategory = ''; })
-              .margin({ right: 12 })
-            Text(this.selectedCategory)
-              .fontSize(20).fontWeight(FontWeight.Bold).fontColor('#1A1A2E')
-              .layoutWeight(1)
-            if (this.isLoadingCategory) {
-              LoadingProgress().width(20).height(20)
+          .padding(12)
+          .backgroundColor('#F5F5F5')
+          .borderRadius(8)
+          .margin({ bottom: 12 });
+
+          // ---- 登录区 ----
+          if (!this.isLoggedIn) {
+            Column() {
+              Text('登录云服务器')
+                .fontSize(16)
+                .fontWeight(600)
+                .width('100%')
+                .margin({ bottom: 8 });
+
+              TextInput({ placeholder: '用户名', text: this.username })
+                .width('100%')
+                .height(44)
+                .borderRadius(8)
+                .border({ width: 1, color: '#DDD' })
+                .padding({ left: 12 })
+                .onChange((val: string): void => {
+                  this.username = val;
+                });
+
+              TextInput({ placeholder: '密码', text: this.password })
+                .width('100%')
+                .height(44)
+                .borderRadius(8)
+                .border({ width: 1, color: '#DDD' })
+                .padding({ left: 12 })
+                .type(InputType.Password)
+                .margin({ top: 8 })
+                .onChange((val: string): void => {
+                  this.password = val;
+                });
+
+              Button('登录')
+                .width('100%')
+                .height(44)
+                .backgroundColor('#007DFF')
+                .fontColor(Color.White)
+                .borderRadius(8)
+                .margin({ top: 12 })
+                .onClick(() => {
+                  this.doLogin();
+                });
+            }
+            .width('100%')
+            .padding(12)
+            .backgroundColor('#F0F8FF')
+            .borderRadius(8)
+            .margin({ bottom: 12 });
+          }
+
+          // ---- 操作按钮 ----
+          Column() {
+            Text('功能测试')
+              .fontSize(16)
+              .fontWeight(600)
+              .width('100%')
+              .margin({ bottom: 8 });
+
+            if (this.isLoggedIn) {
+              Button('退出登录')
+                .width('100%')
+                .height(40)
+                .backgroundColor('#FF6B6B')
+                .fontColor(Color.White)
+                .borderRadius(8)
+                .margin({ bottom: 8 })
+                .onClick(() => {
+                  this.doLogout();
+                });
+            }
+
+            Button('🔄 全量同步')
+              .width('100%')
+              .height(44)
+              .backgroundColor('#007DFF')
+              .fontColor(Color.White)
+              .borderRadius(8)
+              .margin({ bottom: 8 })
+              .enabled(this.isLoggedIn && !this.isSyncing)
+              .onClick(() => {
+                this.doSync();
+              });
+
+            if (this.syncResultText.length > 0) {
+              Text(this.syncResultText)
+                .fontSize(13)
+                .margin({ bottom: 8 });
+            }
+
+            Button('🖼️ 测试图片上传')
+              .width('100%')
+              .height(44)
+              .backgroundColor('#4CAF50')
+              .fontColor(Color.White)
+              .borderRadius(8)
+              .margin({ bottom: 8 })
+              .enabled(this.isLoggedIn)
+              .onClick(() => {
+                this.doUploadTest();
+              });
+
+            if (this.uploadResultText.length > 0) {
+              Text(this.uploadResultText)
+                .fontSize(13)
+                .margin({ bottom: 8 });
             }
           }
-          .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
-          .backgroundColor(Color.White)
+          .width('100%')
+          .padding(12)
+          .backgroundColor('#FFF8E1')
+          .borderRadius(8)
+          .margin({ bottom: 12 });
 
-          Grid() {
-            ForEach(this.currentPhotos, (photo: PhotoItemType) => {
-              GridItem() {
-                Column() {
-                  Image(photo.image)
-                    .width('100%').aspectRatio(1).objectFit(ImageFit.Cover)
-                    .borderRadius(8).backgroundColor('#E8E8E8')
+          // ---- 日志区 ----
+          Column() {
+            Row() {
+              Text('📋 运行日志')
+                .fontSize(16)
+                .fontWeight(600);
+              Blank();
+              Button('清空日志')
+                .fontSize(12)
+                .height(28)
+                .backgroundColor(Color.Gray)
+                .fontColor(Color.White)
+                .borderRadius(4)
+                .onClick(() => {
+                  this.clearLog();
+                });
+            }
+            .width('100%')
+            .margin({ bottom: 6 });
+
+            List({ space: 2 }) {
+              ForEach(this.logLines, (line: string, index: number): void => {
+                ListItem() {
+                  Text(line)
+                    .fontSize(12)
+                    .fontFamily('Courier New')
+                    .fontColor(Color.Gray)
+                    .width('100%');
                 }
-                .width('100%')
-              }
-            })
+              }, (line: string, index: number): string => {
+                return index.toString();
+              });
+            }
+            .width('100%')
+            .height(200)
+            .border({ width: 1, color: '#EEE' })
+            .borderRadius(6)
+            .padding(8)
+            .backgroundColor('#FAFAFA');
           }
-          .columnsTemplate('1fr 1fr 1fr').rowsGap(12).columnsGap(12)
-          .width('95%').padding({ top: 12, bottom: 12 }).layoutWeight(1)
+          .width('100%')
+          .padding(12)
+          .backgroundColor('#F3E5F5')
+          .borderRadius(8);
         }
-        .width('100%').height('100%').backgroundColor('#F8F8FC')
+        .width('100%')
+        .padding(16)
+        .backgroundColor(Color.White);
+      }
+      .width('100%')
+      .height('100%');
+
+      // ---- 错误提示横幅（覆盖层） ----
+      if (this.showErrorBanner) {
+        Column() {
+          // 错误类型标签 + 关闭按钮
+          Row() {
+            Text(this.loginErrorType)
+              .fontSize(14)
+              .fontWeight(700)
+              .fontColor(Color.White);
+            Blank();
+            Button('✕')
+              .fontSize(16)
+              .fontColor(Color.White)
+              .backgroundColor(Color.Transparent)
+              .width(28)
+              .height(28)
+              .onClick(() => {
+                this.dismissError();
+              });
+          }
+          .width('100%')
+          .margin({ bottom: 8 });
+
+          // 错误码
+          if (this.loginErrorCode.length > 0) {
+            Text('错误码: ' + this.loginErrorCode)
+              .fontSize(13)
+              .fontColor(Color.White)
+              .fontWeight(500)
+              .width('100%')
+              .margin({ bottom: 6 });
+          }
+
+          // 错误详情（支持多行）
+          Text(this.loginError)
+            .fontSize(13)
+            .fontColor(Color.White)
+            .lineHeight(20)
+            .width('100%');
+        }
+        .width('90%')
+        .padding(16)
+        .backgroundColor(this.getErrorBgColor())
+        .borderRadius(12)
+        .shadow({
+          radius: 12,
+          color: '#66000000',
+          offsetX: 0,
+          offsetY: 4
+        })
+        .position({ x: '5%', y: 60 })
+        // 使用 TransitionEffect，替代旧版对象字面量语法
+        .transition(
+          TransitionEffect.translate({ x: 0, y: -100 })
+            .combine(TransitionEffect.opacity(0))
+        )
+        // 用 animation 控制动画时长
+        .animation({
+          duration: 300,
+          curve: Curve.EaseInOut
+        });
       }
     }
-    .width('100%').height('100%').backgroundColor('#F8F8FC')
-    .alignItems(HorizontalAlign.Center)
-  }
-}
-
-// ================== 我 Tab（个人主页） ==================
-
-@Component
-struct ProfileView {
-  @Prop myWorks: Array<FeedItemType> = [];
-  onViewPost: (post: FeedItemType) => void = () => {};
-
-  private getPostImage(post: FeedItemType): string | Resource {
-    if (post.url.length > 0) return post.url;
-    return $r('app.media.nai');
+    .width('100%')
+    .height('100%');
   }
 
-  build() {
-    Column() {
-      Column() {
-        Row() {
-          Image($r('app.media.background'))
-            .width(72).height(72).borderRadius(36)
-            .border({ width: 2, color: Color.White }).margin({ right: 16 })
-          Column() {
-            Text('用户名')
-              .fontSize(20).fontWeight(FontWeight.Bold).fontColor(Color.White)
-            Text('个人简介 ✨ 热爱生活')
-              .fontSize(14).fontColor('rgba(255,255,255,0.8)').margin({ top: 4 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          Blank()
-          Image($r('app.media.arrow_right'))
-            .width(24).height(24).fillColor(Color.White)
-        }
-        .width('90%').padding({ top: 30, bottom: 20 })
-
-        Row() {
-          Column() {
-            Text('128').fontSize(20).fontWeight(FontWeight.Bold).fontColor(Color.White)
-            Text('关注').fontSize(13).fontColor('rgba(255,255,255,0.7)')
-          }.margin({ right: 30 })
-          Column() {
-            Text('256').fontSize(20).fontWeight(FontWeight.Bold).fontColor(Color.White)
-            Text('粉丝').fontSize(13).fontColor('rgba(255,255,255,0.7)')
-          }.margin({ right: 30 })
-          Column() {
-            Text('89').fontSize(20).fontWeight(FontWeight.Bold).fontColor(Color.White)
-            Text('获赞').fontSize(13).fontColor('rgba(255,255,255,0.7)')
-          }
-        }
-        .width('90%').padding({ bottom: 24 }).justifyContent(FlexAlign.Start)
-      }
-      .width('100%').backgroundColor('#1A1A2E')
-      .borderRadius({ bottomLeft: 24, bottomRight: 24 })
-
-      Column() {
-        Row() {
-          Text('我的作品').fontSize(18).fontWeight(FontWeight.Medium).fontColor('#1A1A2E')
-          Blank()
-          Text('查看全部 >').fontSize(14).fontColor('#999999')
-        }
-        .width('90%').margin({ top: 20, bottom: 12 })
-
-        Grid() {
-          if (this.myWorks.length > 0) {
-            ForEach(this.myWorks, (post: FeedItemType) => {
-              GridItem() {
-                Image(this.getPostImage(post))
-                  .width('100%').aspectRatio(1)
-                  .borderRadius(8).backgroundColor('#E8E8E8')
-              }
-              .onClick(() => { this.onViewPost(post); })
-            })
-          } else {
-            GridItem() {
-              Column() {
-                Text('📷').fontSize(40).margin({ bottom: 8 })
-                Text('暂无作品').fontSize(14).fontColor('#999999')
-              }
-              .width('100%').aspectRatio(1)
-              .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-              .backgroundColor('#F5F5F5').borderRadius(8)
-            }
-          }
-        }
-        .columnsTemplate('1fr 1fr 1fr').rowsGap(12).columnsGap(12)
-        .width('90%').padding({ bottom: 12 })
-      }
-      .width('100%').alignItems(HorizontalAlign.Center)
+  // ---- 根据错误类型返回背景色 ----
+  private getErrorBgColor(): ResourceColor {
+    switch (this.loginErrorType) {
+      case this.ERROR_TYPES.CERT:
+        return '#E65100'; // 橙色 - 证书问题
+      case this.ERROR_TYPES.NETWORK:
+        return '#1565C0'; // 蓝色 - 网络问题
+      case this.ERROR_TYPES.AUTH:
+        return '#C62828'; // 红色 - 认证问题
+      case this.ERROR_TYPES.PARAM:
+        return '#6A1B9A'; // 紫色 - 配置问题
+      case this.ERROR_TYPES.TIMEOUT:
+        return '#E65100'; // 橙色 - 超时
+      case this.ERROR_TYPES.SERVER:
+        return '#C62828'; // 红色 - 服务器问题
+      default:
+        return '#37474F'; // 深灰 - 未知错误
     }
   }
 }
