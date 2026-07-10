@@ -945,9 +945,12 @@ struct ProfileView {
 
   @State isLoggedIn: boolean = false;
   @State showLoginDialog: boolean = false;
+  @State isRegisterMode: boolean = false;
   @State loginUsername: string = '';
   @State loginPassword: string = '';
+  @State registerConfirmPassword: string = '';
   @State isLoggingIn: boolean = false;
+  @State isRegistering: boolean = false;
   @State syncStatusText: string = '';
 
   async aboutToAppear(): Promise<void> {
@@ -983,6 +986,42 @@ struct ProfileView {
     this.isLoggingIn = false;
   }
 
+  async handleRegister(): Promise<void> {
+    const username: string = this.loginUsername.trim();
+    const password: string = this.loginPassword.trim();
+    const confirmPassword: string = this.registerConfirmPassword.trim();
+    if (username.length === 0 || password.length === 0 || confirmPassword.length === 0) {
+      promptAction.showToast({ message: '请输入账号、密码和确认密码', duration: 2000 });
+      return;
+    }
+    if (password.length < 6) {
+      promptAction.showToast({ message: '密码至少需要 6 位', duration: 2000 });
+      return;
+    }
+    if (password !== confirmPassword) {
+      promptAction.showToast({ message: '两次输入的密码不一致', duration: 2000 });
+      return;
+    }
+
+    this.isRegistering = true;
+    try {
+      const result = await distributedApi.register(username, password);
+      if (result.success) {
+        await SessionManager.saveCredentials(username, password);
+
+        this.isLoggedIn = true;
+        this.closeAuthDialog();
+        promptAction.showToast({ message: '注册成功，已开启云端同步', duration: 2000 });
+        distributedApi.sync(true).catch(() => {});
+      } else {
+        promptAction.showToast({ message: '注册失败: ' + result.message, duration: 2000 });
+      }
+    } catch (err) {
+      promptAction.showToast({ message: '注册异常: ' + (err as Error).message, duration: 2000 });
+    }
+    this.isRegistering = false;
+  }
+
   async handleSync(): Promise<void> {
     if (!this.isLoggedIn) {
       promptAction.showToast({ message: '请先登录', duration: 2000 });
@@ -1013,6 +1052,19 @@ struct ProfileView {
   private getPostImage(post: FeedItemType): string | Resource {
     if (post.url.length > 0) return post.url;
     return $r('app.media.nai');
+  }
+
+  private openAuthDialog(registerMode: boolean): void {
+    this.isRegisterMode = registerMode;
+    this.showLoginDialog = true;
+  }
+
+  private closeAuthDialog(): void {
+    this.showLoginDialog = false;
+    this.loginUsername = '';
+    this.loginPassword = '';
+    this.registerConfirmPassword = '';
+    this.isRegisterMode = false;
   }
 
   build() {
@@ -1070,11 +1122,17 @@ struct ProfileView {
                 .onClick(() => { this.handleLogout(); })
             } else {
               Button('登录云端')
-                .width(120).height(36)
+                .width(100).height(36)
                 .backgroundColor('rgba(255,215,0,0.2)')
                 .fontColor('#FFD700').fontSize(13).fontWeight(FontWeight.Medium)
+                .borderRadius(18).margin({ right: 10 })
+                .onClick(() => { this.openAuthDialog(false); })
+              Button('注册账号')
+                .width(100).height(36)
+                .backgroundColor('rgba(255,255,255,0.1)')
+                .fontColor('rgba(255,255,255,0.8)').fontSize(13)
                 .borderRadius(18)
-                .onClick(() => { this.showLoginDialog = true; })
+                .onClick(() => { this.openAuthDialog(true); })
             }
             Blank()
             Text(this.syncStatusText)
@@ -1126,7 +1184,7 @@ struct ProfileView {
       if (this.showLoginDialog) {
         Column() {
           Column() {
-            Text('登录云端')
+            Text(this.isRegisterMode ? '注册云端账号' : '登录云端')
               .fontSize(20).fontWeight(FontWeight.Bold).fontColor('#1A1A2E')
               .margin({ bottom: 20 })
 
@@ -1140,22 +1198,46 @@ struct ProfileView {
               .width('100%').height(44).backgroundColor('#F5F5F5').borderRadius(10)
               .padding({ left: 16 }).fontSize(15).type(InputType.Password)
               .onChange((v: string) => { this.loginPassword = v; })
-              .margin({ bottom: 20 })
+              .margin({ bottom: this.isRegisterMode ? 12 : 20 })
 
-            Button(this.isLoggingIn ? '登录中...' : '登录')
+            if (this.isRegisterMode) {
+              TextInput({ placeholder: '确认密码', text: this.registerConfirmPassword })
+                .width('100%').height(44).backgroundColor('#F5F5F5').borderRadius(10)
+                .padding({ left: 16 }).fontSize(15).type(InputType.Password)
+                .onChange((v: string) => { this.registerConfirmPassword = v; })
+                .margin({ bottom: 20 })
+            }
+
+            Button(this.isRegisterMode
+              ? (this.isRegistering ? '注册中...' : '注册并登录')
+              : (this.isLoggingIn ? '登录中...' : '登录'))
               .width('100%').height(44)
               .backgroundColor('#FFD700').fontColor('#1A1A2E')
               .fontSize(16).fontWeight(FontWeight.Bold).borderRadius(22)
-              .enabled(!this.isLoggingIn)
-              .onClick(() => { this.handleLogin(); })
+              .enabled(!this.isLoggingIn && !this.isRegistering)
+              .onClick(() => {
+                if (this.isRegisterMode) {
+                  this.handleRegister();
+                } else {
+                  this.handleLogin();
+                }
+              })
+
+            Button(this.isRegisterMode ? '已有账号？去登录' : '没有账号？去注册')
+              .width('100%').height(40)
+              .backgroundColor(Color.Transparent).fontColor('#1A1A2E')
+              .fontSize(14).borderRadius(20).margin({ top: 8 })
+              .enabled(!this.isLoggingIn && !this.isRegistering)
+              .onClick(() => {
+                this.isRegisterMode = !this.isRegisterMode;
+                this.registerConfirmPassword = '';
+              })
 
             Button('取消').width('100%').height(44)
               .backgroundColor('#F5F5F5').fontColor('#999999')
               .fontSize(15).borderRadius(22).margin({ top: 8 })
               .onClick(() => {
-                this.showLoginDialog = false;
-                this.loginUsername = '';
-                this.loginPassword = '';
+                this.closeAuthDialog();
               })
           }
           .width('80%').padding(24)
@@ -1167,9 +1249,7 @@ struct ProfileView {
         .justifyContent(FlexAlign.Center)
         .alignItems(HorizontalAlign.Center)
         .onClick(() => {
-          this.showLoginDialog = false;
-          this.loginUsername = '';
-          this.loginPassword = '';
+          this.closeAuthDialog();
         })
       }
     }
