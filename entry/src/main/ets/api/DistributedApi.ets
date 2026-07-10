@@ -41,7 +41,26 @@ class DistributedApi {
   async login(username: string, password: string): Promise<ApiResult<boolean>> {
     try {
       const ok = await this.d.login(username, password);
-      return { success: ok, data: ok, code: ok ? ErrorCode.SUCCESS : ErrorCode.SERVER_ERROR, message: ok ? '' : '登录失败' };
+      return {
+        success: ok,
+        data: ok,
+        code: ok ? ErrorCode.SUCCESS : ErrorCode.SERVER_ERROR,
+        message: ok ? '' : this.getServiceMessage('登录失败', '登录失败: ')
+      };
+    } catch (e) {
+      return { success: false, data: null, code: ErrorCode.SERVER_ERROR, message: (e as Error).message };
+    }
+  }
+
+  async register(username: string, password: string): Promise<ApiResult<boolean>> {
+    try {
+      const ok = await this.d.register(username, password);
+      return {
+        success: ok,
+        data: ok,
+        code: ok ? ErrorCode.SUCCESS : ErrorCode.SERVER_ERROR,
+        message: ok ? '' : this.getServiceMessage('注册失败', '注册失败: ')
+      };
     } catch (e) {
       return { success: false, data: null, code: ErrorCode.SERVER_ERROR, message: (e as Error).message };
     }
@@ -65,6 +84,17 @@ class DistributedApi {
   }
 
   async release(): Promise<void> { await this.d.release(); }
+
+  private getServiceMessage(fallback: string, prefix: string): string {
+    const message: string = this.d.getState().lastMessage;
+    if (message.length === 0) {
+      return fallback;
+    }
+    if (message.startsWith(prefix)) {
+      return message.substring(prefix.length);
+    }
+    return message;
+  }
 }
 
 export { DistributedApi, SyncConnectionState, DistributedSyncState, SyncDeviceInfo, SyncResult };

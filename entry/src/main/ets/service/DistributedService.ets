@@ -86,6 +86,12 @@ interface LoginBody {
   deviceName: string;
 }
 
+interface RegisterBody {
+  username: string;
+  password: string;
+  deviceName: string;
+}
+
 interface UploadImageBody {
   fileName: string;
   fileData: string;
@@ -177,7 +183,7 @@ export class DistributedService {
   private context: common.UIAbilityContext | null = null;
 
   // ⭐ 使用 HTTP（不是 HTTPS）
-  private static readonly API_BASE: string = 'http://39.105.115.19:3000/api';
+  private static readonly API_BASE: string = 'http://39.106.70.214:3000/api';
   private static readonly AUTH_TOKEN_KEY: string = 'cloud_sync_token';
   private static readonly USER_ID_KEY: string = 'cloud_user_id';
   private static readonly LAST_SYNC_KEY: string = 'cloud_last_sync';
@@ -323,6 +329,39 @@ export class DistributedService {
       this.currentState.state = SyncConnectionState.ERROR;
       const error: BusinessError = err as BusinessError;
       this.currentState.lastMessage = '登录失败: ' + error.message;
+      this.emitState();
+      return false;
+    }
+  }
+
+  // ===== 注册 =====
+  async register(username: string, password: string): Promise<boolean> {
+    this.currentState.state = SyncConnectionState.CONNECTING;
+    this.currentState.lastMessage = '正在注册云端账号...';
+    this.emitState();
+
+    console.info('[DistributedService] ======== 开始注册 ========');
+    console.info('[DistributedService] 用户名: ' + username);
+    console.info('[DistributedService] 服务地址: ' + DistributedService.API_BASE + '/auth/register');
+
+    try {
+      let registerBody: RegisterBody = {
+        username: username,
+        password: password,
+        deviceName: AppStorage.get<string>('deviceName') ?? 'HarmonyOS设备'
+      };
+      let responseObj: Record<string, Object> = await this.post('/auth/register', JsonSafe.stringify(registerBody));
+      let response: ApiResponse<LoginResponse> = this.toApiResponse<LoginResponse>(responseObj);
+      if (!response.success) {
+        throw new Error(response.message);
+      }
+
+      this.applyLoginResponse(response.data, '注册成功');
+      return true;
+    } catch (err) {
+      this.currentState.state = SyncConnectionState.ERROR;
+      const error: BusinessError = err as BusinessError;
+      this.currentState.lastMessage = '注册失败: ' + error.message;
       this.emitState();
       return false;
     }
@@ -635,6 +674,24 @@ export class DistributedService {
     return token ?? '';
   }
 
+  private applyLoginResponse(data: LoginResponse, successMessage: string): void {
+    AppStorage.set<string>(DistributedService.AUTH_TOKEN_KEY, data.token);
+    AppStorage.set<string>(DistributedService.USER_ID_KEY, data.userId);
+
+    this.localDeviceId = data.userId;
+    this.currentState.lastMessage = successMessage;
+    this.currentState.state = SyncConnectionState.CONNECTED;
+    this.emitState();
+
+    let self: DistributedService = this;
+    self.syncNow(true).catch((err: Error) => {
+      console.warn('[DistributedService] 首次同步失败:', err.message);
+    });
+    self.pollTask.start(DistributedService.POLL_INTERVAL, (): void => {
+      self.onPollTick();
+    });
+  }
+
   // ⭐ POST 请求核心方法
   // ⭐ POST 请求核心方法（含详细错误日志）
   private async post(endpoint: string, body: string): Promise<Record<string, Object>> {
@@ -662,7 +719,7 @@ export class DistributedService {
     try {
       const response: http.HttpResponse = await this.httpClient.request(url, options);
       console.info('[DistributedService] <<< 响应状态码: ' + response.responseCode);
-      if (response.responseCode !== 200) {
+      if (response.responseCode < 200 || response.responseCode >= 300) {
         throw new Error('服务器返回状态码: ' + response.responseCode);
       }
       return JSON.parse(response.result as string) as Record<string, Object>;
