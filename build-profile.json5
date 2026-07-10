@@ -30,11 +30,11 @@
         "material": {
           "certpath": "C:\\Users\\huajilianqiujun\\.ohos\\config\\default_Photo_IjgsAIbZ7ldLLjxqr9oaW7Vc3yontOUPgiixz_Mirok=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B407641285BC77437481EACE66BCA38368B48B9E0E484EE367C63A3BA0DB7457A28E4E2284DB991",
+          "keyPassword": "0000001BA82E8E1C640F5F25BB0B5FEDBDF50A7F53165805C8802985A0C5DCD425B14403523B7DF8D81154",
           "profile": "C:\\Users\\huajilianqiujun\\.ohos\\config\\default_Photo_IjgsAIbZ7ldLLjxqr9oaW7Vc3yontOUPgiixz_Mirok=.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "C:\\Users\\huajilianqiujun\\.ohos\\config\\default_Photo_IjgsAIbZ7ldLLjxqr9oaW7Vc3yontOUPgiixz_Mirok=.p12",
-          "storePassword": "0000001B98972F39EE1064443BC1BC0AD13114F343385DC76CB8069A3E39D6E2708860C3E44298DC887338"
+          "storePassword": "0000001BBCA53EA2BF553B40134B9C672595B4A436872B4A295EFE0DE80AC7EE08CF9EB3EBE0811181119E"
         }
       }
     ]
