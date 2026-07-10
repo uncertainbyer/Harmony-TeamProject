@@ -1,5 +1,8 @@
 
 import router from '@ohos.router';
+import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import { common } from '@kit.AbilityKit';
+import { promptAction } from '@kit.ArkUI';
 
 interface TabItemType  {
   title: string;
@@ -10,9 +13,9 @@ interface TabItemType  {
 interface FeedItemType  {
   id: number;
   type: string;
-  url: Resource;
+  url: string;
   username: string;
-  avatar: Resource;
+  avatar: string;
   description: string;
   likes: number;
   comments: number;
@@ -23,7 +26,7 @@ interface FeedItemType  {
 
 interface GeneratedObjectLiteralInterface_1 {
   username: string;
-  avatar: Resource;
+  avatar: string;
 }
 
 @Entry
@@ -33,8 +36,9 @@ struct SocialMediaMain {
   @State currentTabIndex: number = 0;
   @State currentTitle: string = '首页';
   @State showGlobalImagePreview: boolean = false;
-  @State previewImageUrl: Resource = $r('app.media.background');
+  @State previewImageUrl: string = '';
   @State myWorks: Array<FeedItemType> = [];
+  private uiContext?: common.Context;
 
   // Tab数据模型
   private tabItems: Array<TabItemType> = [
@@ -47,29 +51,36 @@ struct SocialMediaMain {
 
   // 模拟内容数据（图片/视频缩略图）
   @State feedData: Array<FeedItemType> = [
-    { id: 1, type: 'image', url: $r('app.media.nai'), username: '旅行达人', avatar: $r('app.media.nai'), description: '今日份夕阳美景 ', likes: 128, comments: 23, isLiked: false, commentsList: ['太美了！', '在哪里拍的？', '好想去']},
-    { id: 2, type: 'video', url: $r('app.media.background'), username: '美食侦探', avatar: $r('app.media.nai'), description: '街头小吃大合集 ', likes: 256, comments: 45, isLiked: false, commentsList: ['想吃！', '地址在哪里？']},
-    { id: 3, type: 'image', url: $r('app.media.background'), username: '城市记录者', avatar: $r('app.media.nai'), description: '雨后城市的倒影', likes: 89, comments: 12, isLiked: false, commentsList: ['想吃！', '地址在哪里？']},
-    { id: 4, type: 'video', url: $r('app.media.background'), username: '萌宠日记', avatar: $r('app.media.nai'), description: '小猫咪的日常 ', likes: 512, comments: 67, isLiked: false, commentsList: ['想吃！', '地址在哪里？']},
-    { id: 5, type: 'image', url: $r('app.media.background'), username: '艺术爱好者', avatar: $r('app.media.nai'), description: '街头涂鸦艺术 ', likes: 175, comments: 31, isLiked: false, commentsList: ['想吃！', '地址在哪里？']},
-    { id: 6, type: 'image', url: $r('app.media.background'), username: '自然风光', avatar: $r('app.media.nai'), description: '山间晨雾', likes: 342, comments: 54, isLiked: false, commentsList: ['想吃！', '地址在哪里？']}
+    { id: 1, type: 'image', url: '', username: '旅行达人', avatar: '', description: '今日份夕阳美景 ', likes: 128, comments: 23, isLiked: false, commentsList: ['太美了！', '在哪里拍的？', '好想去']},
+    { id: 2, type: 'video', url: '', username: '美食侦探', avatar: '', description: '街头小吃大合集 ', likes: 256, comments: 45, isLiked: false, commentsList: ['想吃！', '地址在哪里？']},
+    { id: 3, type: 'image', url: '', username: '城市记录者', avatar: '', description: '雨后城市的倒影', likes: 89, comments: 12, isLiked: false, commentsList: ['想吃！', '地址在哪里？']},
+    { id: 4, type: 'video', url: '', username: '萌宠日记', avatar: '', description: '小猫咪的日常 ', likes: 512, comments: 67, isLiked: false, commentsList: ['想吃！', '地址在哪里？']},
+    { id: 5, type: 'image', url: '', username: '艺术爱好者', avatar: '', description: '街头涂鸦艺术 ', likes: 175, comments: 31, isLiked: false, commentsList: ['想吃！', '地址在哪里？']},
+    { id: 6, type: 'image', url: '', username: '自然风光', avatar: '', description: '山间晨雾', likes: 342, comments: 54, isLiked: false, commentsList: ['想吃！', '地址在哪里？']}
   ];
 
   // 底部Tab组件高度（参考抖音风格，更高一些）
   private tabBarHeight: number = 72;
-  handleImageClick(imageUrl: Resource) {
+
+  aboutToAppear(): void {
+    try {
+      this.uiContext = getContext(this);
+    } catch (_) {}
+  }
+
+  handleImageClick(imageUrl: string) {
     this.previewImageUrl = imageUrl;
     this.showGlobalImagePreview = true;
   }
   private currentUser: GeneratedObjectLiteralInterface_1 = {
     username: '我',
-    avatar: $r('app.media.nai')
+    avatar: ''
   };
-  handlePublish(description: string, imageUrl: Resource) {
+  handlePublish(description: string, imageUrl: string) {
     const newPost: FeedItemType = {
       id: this.feedData.length + 1,
       type: 'image',
-      url: imageUrl || $r('app.media.nai'),
+      url: imageUrl || '',
       username: this.currentUser.username,
       avatar: this.currentUser.avatar,
       description: description || '分享我的生活',
@@ -91,7 +102,7 @@ struct SocialMediaMain {
       Stack() {
         // 首页Tab - 图片/视频瀑布流（参考微信朋友圈）
         if (this.currentTabIndex === 0) {
-          FeedList({ feedData: this.feedData, onImageClick: (url: Resource): void => this.handleImageClick(url) })
+          FeedList({ feedData: this.feedData, onImageClick: (url: string): void => this.handleImageClick(url) })
         }
         // AI识图Tab - 展示AI识别功能界面（UI设计示意）
         if (this.currentTabIndex === 1) {
@@ -99,7 +110,7 @@ struct SocialMediaMain {
         }
         // 发布Tab - 发布内容界面（UI设计示意）
         if (this.currentTabIndex === 2) {
-          PublishView({ onPublish: (description: string, imageUrl: Resource): void => this.handlePublish(description,
+          PublishView({ uiContext: this.uiContext, onPublish: (description: string, imageUrl: string): void => this.handlePublish(description,
             imageUrl) })
         }
         // 分类Tab - 内容分类浏览（UI设计示意）
@@ -188,7 +199,7 @@ struct SocialMediaMain {
 @Component
 struct FeedList {
   @Prop feedData: Array<FeedItemType>;
-  onImageClick: (url: Resource) => void = () => {};
+  onImageClick: (url: string) => void = () => {};
 
   build() {
     List() {
@@ -211,7 +222,7 @@ struct FeedList {
 @Component
 struct FeedItem {
   @Prop feed: FeedItemType;
-  onImageClick: (url: Resource) => void = () => {};
+  onImageClick: (url: string) => void = () => {};
   @State isLiked: boolean = false;
   @State likeCount: number = 0;
   @State showCommentInput: boolean = false;
@@ -514,11 +525,34 @@ struct AICameraView {
 @Component
 struct PublishView {
   @State description: string = '';
-  @State selectedImage: Resource = $r('app.media.nai');
+  @State selectedImage: string = '';
   @State hasSelectedImage: boolean = false;
   @State isPressed1: boolean = false;
   @State isPressed2: boolean = false;
-  onPublish: (description: string, imageUrl: Resource) => void = () => {};
+  @Prop uiContext?: common.Context;
+  onPublish: (description: string, imageUrl: string) => void = () => {};
+
+  async selectImage(): Promise<void> {
+    try {
+      if (this.uiContext === undefined) {
+        promptAction.showToast({ message: '无法获取上下文', duration: 2000 });
+        return;
+      }
+      const phAccessHelper = photoAccessHelper.getPhotoAccessHelper(this.uiContext);
+      const picker = new photoAccessHelper.PhotoViewPicker();
+      const options = new photoAccessHelper.PhotoSelectOptions();
+      options.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE;
+      options.maxSelectNumber = 1;
+      const result = await picker.select(options);
+      const uris: string[] = result.photoUris;
+      if (uris.length > 0) {
+        this.selectedImage = uris[0];
+        this.hasSelectedImage = true;
+      }
+    } catch (err) {
+      promptAction.showToast({ message: '选择图片失败: ' + (err as Error).message, duration: 2000 });
+    }
+  }
   build() {
     Column() {
       // 发布内容区域
@@ -569,10 +603,7 @@ struct PublishView {
             }
           }
           .margin({ right: 10 })
-          .onClick(() => {
-            // 模拟选择图片（实际开发中调用相册选择）
-            this.hasSelectedImage = !this.hasSelectedImage;
-          })
+          .onClick(() => { this.selectImage(); })
         }
         .width('90%')
         .justifyContent(FlexAlign.Start)

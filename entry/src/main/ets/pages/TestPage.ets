@@ -182,6 +182,49 @@ struct SocialMediaMain {
     this.isLoadingFeed = false;
   }
 
+  // ============ 点赞/评论状态同步 ============
+
+  handleLikeChange(postId: string, isLiked: boolean, newCount: number): void {
+    const newFeedData: FeedItemType[] = [];
+    for (let i = 0; i < this.feedData.length; i++) {
+      const item = this.feedData[i];
+      if (item.postId === postId) {
+        newFeedData.push({
+          id: item.id, postId: item.postId, type: item.type, url: item.url,
+          username: item.username, avatar: item.avatar, description: item.description,
+          likes: newCount, comments: item.comments, isLiked: isLiked,
+          commentsList: item.commentsList, categoryId: item.categoryId, categoryName: item.categoryName,
+        });
+      } else {
+        newFeedData.push(item);
+      }
+    }
+    this.feedData = newFeedData;
+  }
+
+  handleCommentAdd(postId: string, comment: string): void {
+    const newFeedData: FeedItemType[] = [];
+    for (let i = 0; i < this.feedData.length; i++) {
+      const item = this.feedData[i];
+      if (item.postId === postId) {
+        const filtered: string[] = [];
+        for (let j = 0; j < item.commentsList.length; j++) {
+          if (item.commentsList[j].length > 0) filtered.push(item.commentsList[j]);
+        }
+        filtered.push(comment);
+        newFeedData.push({
+          id: item.id, postId: item.postId, type: item.type, url: item.url,
+          username: item.username, avatar: item.avatar, description: item.description,
+          likes: item.likes, comments: filtered.length, isLiked: item.isLiked,
+          commentsList: filtered, categoryId: item.categoryId, categoryName: item.categoryName,
+        });
+      } else {
+        newFeedData.push(item);
+      }
+    }
+    this.feedData = newFeedData;
+  }
+
   // ============ 发布帖子 ============
 
   async handlePublish(description: string, imageUrl: string): Promise<void> {
@@ -257,7 +300,13 @@ struct SocialMediaMain {
                 feedData: this.feedData,
                 onImageClick: (url: string): void => this.handleImageClick(url),
                 hasMore: this.hasMoreFeed,
-                onLoadMore: (): void => { this.loadFeed(false); }
+                onLoadMore: (): void => { this.loadFeed(false); },
+                onLikeChange: (postId: string, isLiked: boolean, newCount: number): void => {
+                  this.handleLikeChange(postId, isLiked, newCount);
+                },
+                onCommentAdd: (postId: string, comment: string): void => {
+                  this.handleCommentAdd(postId, comment);
+                }
               })
             }
           }
@@ -266,6 +315,7 @@ struct SocialMediaMain {
           }
           if (this.currentTabIndex === 2) {
             PublishView({
+              uiContext: this.uiContext,
               onPublish: (description: string, imageUrl: string): void => {
                 this.handlePublish(description, imageUrl);
               }
@@ -332,12 +382,19 @@ struct FeedList {
   onImageClick: (url: string) => void = () => {};
   @Prop hasMore: boolean = false;
   onLoadMore?: () => void;
+  onLikeChange: (postId: string, isLiked: boolean, newCount: number) => void = () => {};
+  onCommentAdd: (postId: string, comment: string) => void = () => {};
 
   build() {
     List() {
       ForEach(this.feedData, (item: FeedItemType) => {
         ListItem() {
-          FeedItem({ feed: item, onImageClick: this.onImageClick })
+          FeedItem({
+            feed: item,
+            onImageClick: this.onImageClick,
+            onLikeChange: this.onLikeChange,
+            onCommentAdd: this.onCommentAdd
+          })
         }
         .margin({ bottom: 10 })
       })
@@ -368,6 +425,8 @@ struct FeedItem {
     categoryId: '', categoryName: ''
   };
   onImageClick: (url: string) => void = () => {};
+  onLikeChange: (postId: string, isLiked: boolean, newCount: number) => void = () => {};
+  onCommentAdd: (postId: string, comment: string) => void = () => {};
   @State isLiked: boolean = false;
   @State likeCount: number = 0;
   @State showCommentInput: boolean = false;
@@ -392,16 +451,21 @@ struct FeedItem {
   async handleLikeClick(): Promise<void> {
     try {
       if (this.feed.postId.length === 0) {
-        this.isLiked = !this.isLiked;
-        this.likeCount = this.isLiked ? this.likeCount + 1 : this.likeCount - 1;
+        const newIsLiked: boolean = !this.isLiked;
+        const newCount: number = newIsLiked ? this.likeCount + 1 : this.likeCount - 1;
+        this.isLiked = newIsLiked;
+        this.likeCount = newCount;
+        this.onLikeChange(this.feed.postId, newIsLiked, newCount);
         return;
       }
       const result = this.isLiked
         ? await postApi.unlike(this.feed.postId)
         : await postApi.like(this.feed.postId);
       if (result.success && result.data !== null) {
-        this.isLiked = !this.isLiked;
+        const newIsLiked: boolean = !this.isLiked;
+        this.isLiked = newIsLiked;
         this.likeCount = result.data;
+        this.onLikeChange(this.feed.postId, newIsLiked, result.data);
         if (distributedApi.isReady()) {
           distributedApi.sync(false);
         }
@@ -426,6 +490,7 @@ struct FeedItem {
         this.commentsList = newList;
         this.commentText = '';
         this.isSending = false;
+        this.onCommentAdd(this.feed.postId, trimmed);
         return;
       }
 
@@ -442,6 +507,7 @@ struct FeedItem {
         newList.push(trimmed);
         this.commentsList = newList;
         this.commentText = '';
+        this.onCommentAdd(this.feed.postId, trimmed);
         if (distributedApi.isReady()) {
           distributedApi.sync(false);
         }
@@ -698,7 +764,30 @@ struct PublishView {
   @State isPressed1: boolean = false;
   @State isPressed2: boolean = false;
   @State isPublishing: boolean = false;
+  @Prop uiContext?: common.Context;
   onPublish: (description: string, imageUrl: string) => void = () => {};
+
+  async selectImage(): Promise<void> {
+    try {
+      if (this.uiContext === undefined) {
+        promptAction.showToast({ message: '无法获取上下文', duration: 2000 });
+        return;
+      }
+      const phAccessHelper = photoAccessHelper.getPhotoAccessHelper(this.uiContext);
+      const picker = new photoAccessHelper.PhotoViewPicker();
+      const options = new photoAccessHelper.PhotoSelectOptions();
+      options.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE;
+      options.maxSelectNumber = 1;
+      const result = await picker.select(options);
+      const uris: string[] = result.photoUris;
+      if (uris.length > 0) {
+        this.selectedImage = uris[0];
+        this.hasSelectedImage = true;
+      }
+    } catch (err) {
+      promptAction.showToast({ message: '选择图片失败: ' + (err as Error).message, duration: 2000 });
+    }
+  }
 
   build() {
     Column() {
@@ -728,7 +817,7 @@ struct PublishView {
             }
           }
           .margin({ right: 10 })
-          .onClick(() => { this.hasSelectedImage = !this.hasSelectedImage; })
+          .onClick(() => { this.selectImage(); })
         }
         .width('90%').justifyContent(FlexAlign.Start).margin({ top: 16 })
 
