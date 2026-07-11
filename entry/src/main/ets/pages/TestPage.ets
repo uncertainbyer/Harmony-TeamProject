@@ -9,7 +9,6 @@ import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { common } from '@kit.AbilityKit';
 import { LikedCache } from '../common/LikedCache';
 import { SessionManager } from '../common/SessionManager';
-import { camera, cameraPicker } from '@kit.CameraKit';
 
 interface TabItemType {
   title: string;
@@ -981,45 +980,6 @@ struct AICameraView {
     }
   }
 
-  async recognizeFromCamera(): Promise<void> {
-    this.isRecognizing = true;
-    this.recognizeResult = '正在打开相机...';
-    this.recognizeDetail = '';
-    try {
-      let abilityContext: common.Context | undefined =
-        AppStorage.get<common.Context>('globalAbilityContext');
-      if (abilityContext === undefined) {
-        if (this.uiContext === undefined) {
-          this.isRecognizing = false;
-          this.recognizeResult = '相机启动失败';
-          this.recognizeDetail = '无法获取应用上下文，请重新进入页面';
-          return;
-        }
-        abilityContext = this.uiContext as common.Context;
-      }
-      const pickerProfile: cameraPicker.PickerProfile = {
-        cameraPosition: camera.CameraPosition.CAMERA_POSITION_BACK
-      };
-      const pickerResult: cameraPicker.PickerResult = await cameraPicker.pick(
-        abilityContext,
-        [cameraPicker.PickerMediaType.PHOTO],
-        pickerProfile
-      );
-      if (pickerResult.resultCode === 0 && pickerResult.resultUri) {
-        await this.runClassify(pickerResult.resultUri);
-      } else {
-        this.isRecognizing = false;
-        this.recognizeResult = '';
-        this.recognizeDetail = '';
-      }
-    } catch (err) {
-      this.isRecognizing = false;
-      this.recognizeResult = '';
-      this.recognizeDetail = '';
-      console.warn('[AICameraView] 相机调用失败:', (err as Error).message);
-    }
-  }
-
   async runClassify(imageUri: string): Promise<void> {
     this.recognizeResult = 'AI 识别中...';
     this.recognizeDetail = '';
@@ -1086,17 +1046,11 @@ struct AICameraView {
       .margin({ top: 20, bottom: 10 })
 
       Row() {
-        Button('相册选择')
-          .width(120).height(44).backgroundColor('#FFD700')
+        Button('选择图片/拍照')
+          .width(180).height(44).backgroundColor('#FFD700')
           .fontColor('#1A1A2E').borderRadius(22).fontSize(15).fontWeight(FontWeight.Medium)
           .enabled(!this.isRecognizing)
           .onClick(() => { this.recognizeFromAlbum(); })
-
-        Button('拍照识别')
-          .width(120).height(44).backgroundColor('#1A1A2E')
-          .fontColor(Color.White).borderRadius(22).fontSize(15).fontWeight(FontWeight.Medium)
-          .margin({ left: 20 }).enabled(!this.isRecognizing)
-          .onClick(() => { this.recognizeFromCamera(); })
       }
       .width('100%').justifyContent(FlexAlign.Center)
       .margin({ top: 20 })
@@ -1132,7 +1086,7 @@ struct AICameraView {
             .borderRadius(8).backgroundColor('#FAFAFA').padding({ left: 10, right: 10 })
           })
         } else {
-          Text('点击上方「相册选择」或「拍照识别」按钮，选择一张图片进行 AI 识别')
+          Text('点击上方「选择图片/拍照」按钮，选择照片或拍照进行 AI 识别')
             .fontSize(13).fontColor('#999999').width('90%').textAlign(TextAlign.Center)
         }
       }

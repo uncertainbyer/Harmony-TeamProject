@@ -27,6 +27,10 @@
     {
       "name": "network_info_reason",
       "value": "用于检测网络状态，在网络恢复时自动重连云服务器"
+    },
+    {
+      "name": "camera_reason",
+      "value": "用于拍照进行AI图像识别和分类"
     }
   ]
 }
