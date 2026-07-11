@@ -28,13 +28,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "C:\\Users\\huajilianqiujun\\.ohos\\config\\default_Photo_IjgsAIbZ7ldLLjxqr9oaW7Vc3yontOUPgiixz_Mirok=.cer",
+          "certpath": "C:\\Users\\24785\\.ohos\\config\\default_Harmony-TeamProject_727yxTJGkCASs94E1Fdjz7OvQn3N1t0EhAmGllu-DfI=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B407641285BC77437481EACE66BCA38368B48B9E0E484EE367C63A3BA0DB7457A28E4E2284DB991",
-          "profile": "C:\\Users\\huajilianqiujun\\.ohos\\config\\default_Photo_IjgsAIbZ7ldLLjxqr9oaW7Vc3yontOUPgiixz_Mirok=.p7b",
+          "keyPassword": "0000001B71CED160A4430A935DFE0F56DCA37C681B569DDB312AB6F9079503C565FFC885C21CC2795D0D0F",
+          "profile": "C:\\Users\\24785\\.ohos\\config\\default_Harmony-TeamProject_727yxTJGkCASs94E1Fdjz7OvQn3N1t0EhAmGllu-DfI=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "C:\\Users\\huajilianqiujun\\.ohos\\config\\default_Photo_IjgsAIbZ7ldLLjxqr9oaW7Vc3yontOUPgiixz_Mirok=.p12",
-          "storePassword": "0000001B98972F39EE1064443BC1BC0AD13114F343385DC76CB8069A3E39D6E2708860C3E44298DC887338"
+          "storeFile": "C:\\Users\\24785\\.ohos\\config\\default_Harmony-TeamProject_727yxTJGkCASs94E1Fdjz7OvQn3N1t0EhAmGllu-DfI=.p12",
+          "storePassword": "0000001B33A9C1FD14C54B5F4E8D68C9C222B6700F213BC650EFABC083FC97D89F0E36EB54817ABA2ABBA8"
         }
       }
     ]
