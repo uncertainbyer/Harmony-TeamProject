@@ -77,7 +77,7 @@ export interface UploadImageResponse {
 export interface ApiResponse<T> {
   success: boolean;
   message: string;
-  data: T;
+  data: T | null;
 }
 
 interface LoginBody {
@@ -305,14 +305,12 @@ export class DistributedService {
       };
       let responseObj: Record<string, Object> = await this.post('/auth/login', JsonSafe.stringify(loginBody));
       let response: ApiResponse<LoginResponse> = this.toApiResponse<LoginResponse>(responseObj);
-      if (!response.success) {
-        throw new Error(response.message);
-      }
+      const loginData: LoginResponse = this.requireResponseData<LoginResponse>(response, '登录失败');
 
-      AppStorage.set<string>(DistributedService.AUTH_TOKEN_KEY, response.data.token);
-      AppStorage.set<string>(DistributedService.USER_ID_KEY, response.data.userId);
+      AppStorage.set<string>(DistributedService.AUTH_TOKEN_KEY, loginData.token);
+      AppStorage.set<string>(DistributedService.USER_ID_KEY, loginData.userId);
 
-      this.localDeviceId = response.data.userId;
+      this.localDeviceId = loginData.userId;
       this.currentState.lastMessage = '登录成功';
       this.currentState.state = SyncConnectionState.CONNECTED;
       this.emitState();
@@ -352,11 +350,9 @@ export class DistributedService {
       };
       let responseObj: Record<string, Object> = await this.post('/auth/register', JsonSafe.stringify(registerBody));
       let response: ApiResponse<LoginResponse> = this.toApiResponse<LoginResponse>(responseObj);
-      if (!response.success) {
-        throw new Error(response.message);
-      }
+      const registerData: LoginResponse = this.requireResponseData<LoginResponse>(response, '注册失败');
 
-      this.applyLoginResponse(response.data, '注册成功');
+      this.applyLoginResponse(registerData, '注册成功');
       return true;
     } catch (err) {
       this.currentState.state = SyncConnectionState.ERROR;
@@ -449,6 +445,11 @@ export class DistributedService {
     } catch (err) {
       const error: BusinessError = err as BusinessError;
       result.errorMsg = error.message;
+      if (this.isAuthTokenError(result.errorMsg)) {
+        result.errorMsg = '登录已过期，请重新登录';
+        this.clearCloudLoginState(result.errorMsg);
+        return result;
+      }
       this.currentState.state = SyncConnectionState.ERROR;
       this.currentState.lastMessage = '同步失败: ' + result.errorMsg;
       this.emitState();
@@ -554,10 +555,12 @@ export class DistributedService {
 
     let responseObj: Record<string, Object> = await this.post('/images/upload', JsonSafe.stringify(uploadBody));
     let response: ApiResponse<UploadImageResponse> = this.toApiResponse<UploadImageResponse>(responseObj);
-    if (!response.success) {
-      throw new Error('图片上传失败: ' + response.message);
+    const uploadData: UploadImageResponse =
+      this.requireResponseData<UploadImageResponse>(response, '图片上传失败');
+    if (uploadData.remoteUrls.length === 0) {
+      throw new Error('图片上传失败: 服务器未返回图片地址');
     }
-    return response.data.remoteUrls[0];
+    return uploadData.remoteUrls[0];
   }
 
   private async pushLocalData(forceFull: boolean): Promise<SyncUploadResponse> {
@@ -614,15 +617,17 @@ export class DistributedService {
 
     let responseObj: Record<string, Object> = await this.post('/sync/upload', JsonSafe.stringify(syncBody));
     let response: ApiResponse<SyncUploadResponse> = this.toApiResponse<SyncUploadResponse>(responseObj);
+    const uploadData: SyncUploadResponse =
+      this.requireResponseData<SyncUploadResponse>(response, '同步上传失败');
 
-    for (let i = 0; i < response.data.acceptedPostIds.length; i++) {
-      await this.postRepository.updatePostSyncStatus(response.data.acceptedPostIds[i], 1);
+    for (let i = 0; i < uploadData.acceptedPostIds.length; i++) {
+      await this.postRepository.updatePostSyncStatus(uploadData.acceptedPostIds[i], 1);
     }
-    for (let i = 0; i < response.data.acceptedCommentIds.length; i++) {
-      await this.commentRepository.updateCommentSyncStatus(response.data.acceptedCommentIds[i], 1);
+    for (let i = 0; i < uploadData.acceptedCommentIds.length; i++) {
+      await this.commentRepository.updateCommentSyncStatus(uploadData.acceptedCommentIds[i], 1);
     }
 
-    return response.data;
+    return uploadData;
   }
 
   private async pullRemoteData(): Promise<SyncDownloadResponse> {
@@ -636,7 +641,8 @@ export class DistributedService {
 
     let responseObj: Record<string, Object> = await this.post('/sync/download', JsonSafe.stringify(pullBody));
     let response: ApiResponse<SyncDownloadResponse> = this.toApiResponse<SyncDownloadResponse>(responseObj);
-    const data: SyncDownloadResponse = response.data;
+    const data: SyncDownloadResponse =
+      this.requireResponseData<SyncDownloadResponse>(response, '同步拉取失败');
 
     for (let i = 0; i < data.posts.length; i++) {
       const postData: SyncPostData = data.posts[i];
@@ -672,6 +678,30 @@ export class DistributedService {
   private getToken(): string {
     let token: string | undefined = AppStorage.get<string>(DistributedService.AUTH_TOKEN_KEY);
     return token ?? '';
+  }
+
+  private isAuthTokenError(message: string): boolean {
+    const lowerMessage: string = message.toLowerCase();
+    return lowerMessage.includes('invalid or expired token') ||
+      lowerMessage.includes('invaild or expired token') ||
+      lowerMessage.includes('missing authorization token');
+  }
+
+  private clearCloudLoginState(message: string): void {
+    this.pollTask.stop();
+    this.syncAgain = false;
+
+    AppStorage.delete(DistributedService.AUTH_TOKEN_KEY);
+    AppStorage.delete(DistributedService.USER_ID_KEY);
+    AppStorage.delete(DistributedService.LAST_SYNC_KEY);
+
+    this.localDeviceId = 'local_' + UUIDUtil.generateShort();
+    this.currentState.state = SyncConnectionState.ERROR;
+    this.currentState.lastMessage = message;
+    this.currentState.receivedPostCount = 0;
+    this.currentState.receivedCommentCount = 0;
+    this.currentState.transferProgress = 0;
+    this.emitState();
   }
 
   private applyLoginResponse(data: LoginResponse, successMessage: string): void {
@@ -757,9 +787,20 @@ export class DistributedService {
     let result: ApiResponse<T> = {
       success: obj['success'] as boolean,
       message: obj['message'] as string,
-      data: obj['data'] as T
+      data: obj['data'] as T | null
     };
     return result;
+  }
+
+  private requireResponseData<T>(response: ApiResponse<T>, fallbackMessage: string): T {
+    if (!response.success) {
+      const message: string = response.message.length > 0 ? response.message : fallbackMessage;
+      throw new Error(message);
+    }
+    if (response.data === null) {
+      throw new Error(fallbackMessage + ': 服务器返回数据为空');
+    }
+    return response.data;
   }
 
   private copyState(): DistributedSyncState {

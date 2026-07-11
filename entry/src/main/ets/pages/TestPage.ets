@@ -1036,9 +1036,11 @@ struct ProfileView {
       if (result.success) {
         promptAction.showToast({ message: '同步成功，共 ' + result.syncCount + ' 条', duration: 2000 });
       } else {
+        this.isLoggedIn = distributedApi.isReady() && !distributedApi.localDeviceId.startsWith('local_');
         promptAction.showToast({ message: '同步失败: ' + result.errorMsg, duration: 2000 });
       }
     } catch (err) {
+      this.isLoggedIn = distributedApi.isReady() && !distributedApi.localDeviceId.startsWith('local_');
       promptAction.showToast({ message: '同步异常: ' + (err as Error).message, duration: 2000 });
     }
   }
