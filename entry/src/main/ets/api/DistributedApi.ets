@@ -13,13 +13,17 @@ import { ErrorCode } from '../common/Constants';
 class DistributedApi {
   private static instance: DistributedApi | null = null;
   private d = DistributedService.getInstance();
+  private initTask: Promise<void> | null = null;
 
   static getInstance(): DistributedApi {
     if (!DistributedApi.instance) { DistributedApi.instance = new DistributedApi(); }
     return DistributedApi.instance;
   }
 
-  async init(ctx: common.UIAbilityContext): Promise<void> { await this.d.init(ctx); }
+  async init(ctx: common.UIAbilityContext): Promise<void> {
+    AppStorage.setOrCreate<object>('uiAbilityContext', ctx);
+    await this.runInit(ctx);
+  }
   isReady(): boolean { return this.d.isReady(); }
   get localDeviceId(): string { return this.d.getLocalDeviceId(); }
 
@@ -40,6 +44,7 @@ class DistributedApi {
 
   async login(username: string, password: string): Promise<ApiResult<boolean>> {
     try {
+      await this.ensureReady();
       const ok = await this.d.login(username, password);
       return {
         success: ok,
@@ -54,6 +59,7 @@ class DistributedApi {
 
   async register(username: string, password: string): Promise<ApiResult<boolean>> {
     try {
+      await this.ensureReady();
       const ok = await this.d.register(username, password);
       return {
         success: ok,
@@ -76,14 +82,44 @@ class DistributedApi {
   }
 
   async sync(forceFull: boolean): Promise<SyncResult> {
+    await this.ensureReady();
     return await this.d.syncNow(forceFull);
   }
 
   async uploadImages(uris: string[]): Promise<string[]> {
+    await this.ensureReady();
     return await this.d.uploadImages(uris);
   }
 
   async release(): Promise<void> { await this.d.release(); }
+
+  private async ensureReady(): Promise<void> {
+    if (this.d.isReady()) {
+      return;
+    }
+    const context: common.UIAbilityContext | undefined =
+      AppStorage.get<common.UIAbilityContext>('uiAbilityContext');
+    if (context === undefined) {
+      throw new Error('同步服务尚未初始化，请稍后再试');
+    }
+    await this.runInit(context);
+  }
+
+  private async runInit(ctx: common.UIAbilityContext): Promise<void> {
+    if (this.d.isReady()) {
+      return;
+    }
+    if (this.initTask !== null) {
+      await this.initTask;
+      return;
+    }
+    this.initTask = this.d.init(ctx);
+    try {
+      await this.initTask;
+    } finally {
+      this.initTask = null;
+    }
+  }
 
   private getServiceMessage(fallback: string, prefix: string): string {
     const message: string = this.d.getState().lastMessage;

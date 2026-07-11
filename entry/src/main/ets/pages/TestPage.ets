@@ -955,8 +955,12 @@ struct ProfileView {
 
   async aboutToAppear(): Promise<void> {
     try {
+      const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+      AppStorage.setOrCreate<object>('uiAbilityContext', context);
+      await distributedApi.init(context);
       this.isLoggedIn = distributedApi.isReady() && !distributedApi.localDeviceId.startsWith('local_');
-    } catch (_) {
+    } catch (err) {
+      console.warn('[ProfileView] 云同步初始化失败:', (err as Error).message);
       this.isLoggedIn = false;
     }
   }

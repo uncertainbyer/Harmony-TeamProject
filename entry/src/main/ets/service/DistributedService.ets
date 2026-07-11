@@ -696,7 +696,7 @@ export class DistributedService {
   // ⭐ POST 请求核心方法（含详细错误日志）
   private async post(endpoint: string, body: string): Promise<Record<string, Object>> {
     if (this.httpClient === null) {
-      throw new Error('HTTP客户端未初始化，请先调用 init()');
+      this.httpClient = http.createHttp();
     }
 
     const url: string = DistributedService.API_BASE + endpoint;
