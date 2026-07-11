@@ -95,6 +95,10 @@ def init_db():
               ON posts(owner_user_id, server_updated_at);
             CREATE INDEX IF NOT EXISTS idx_posts_owner_category
               ON posts(owner_user_id, category_id);
+            CREATE INDEX IF NOT EXISTS idx_posts_global_updated
+              ON posts(server_updated_at);
+            CREATE INDEX IF NOT EXISTS idx_posts_global_post_updated
+              ON posts(post_id, server_updated_at);
 
             CREATE TABLE IF NOT EXISTS comments (
               owner_user_id TEXT NOT NULL,
@@ -119,6 +123,10 @@ def init_db():
               ON comments(owner_user_id, server_updated_at);
             CREATE INDEX IF NOT EXISTS idx_comments_owner_post
               ON comments(owner_user_id, post_id);
+            CREATE INDEX IF NOT EXISTS idx_comments_global_updated
+              ON comments(server_updated_at);
+            CREATE INDEX IF NOT EXISTS idx_comments_global_comment_updated
+              ON comments(comment_id, server_updated_at);
             """
         )
 
@@ -554,12 +562,42 @@ class Handler(BaseHTTPRequestHandler):
         last_sync = integer(body.get("lastSyncTimestamp"), 0)
         with connect_db() as conn:
             post_rows = conn.execute(
-                "SELECT * FROM posts WHERE owner_user_id = ? AND server_updated_at > ? ORDER BY server_updated_at ASC",
-                (user["id"], last_sync),
+                """
+                SELECT p.* FROM posts p
+                WHERE p.server_updated_at > ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM posts newer
+                    WHERE newer.post_id = p.post_id
+                      AND (
+                        newer.server_updated_at > p.server_updated_at
+                        OR (
+                          newer.server_updated_at = p.server_updated_at
+                          AND newer.owner_user_id > p.owner_user_id
+                        )
+                      )
+                  )
+                ORDER BY p.server_updated_at ASC
+                """,
+                (last_sync,),
             ).fetchall()
             comment_rows = conn.execute(
-                "SELECT * FROM comments WHERE owner_user_id = ? AND server_updated_at > ? ORDER BY server_updated_at ASC",
-                (user["id"], last_sync),
+                """
+                SELECT c.* FROM comments c
+                WHERE c.server_updated_at > ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM comments newer
+                    WHERE newer.comment_id = c.comment_id
+                      AND (
+                        newer.server_updated_at > c.server_updated_at
+                        OR (
+                          newer.server_updated_at = c.server_updated_at
+                          AND newer.owner_user_id > c.owner_user_id
+                        )
+                      )
+                  )
+                ORDER BY c.server_updated_at ASC
+                """,
+                (last_sync,),
             ).fetchall()
         latest = last_sync
         for row in list(post_rows) + list(comment_rows):

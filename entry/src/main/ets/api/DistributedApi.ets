@@ -42,10 +42,10 @@ class DistributedApi {
     await this.d.connectDevice(deviceId);
   }
 
-  async login(username: string, password: string): Promise<ApiResult<boolean>> {
+  async login(username: string, password: string, syncAfterLogin: boolean = true): Promise<ApiResult<boolean>> {
     try {
       await this.ensureReady();
-      const ok = await this.d.login(username, password);
+      const ok = await this.d.login(username, password, syncAfterLogin);
       return {
         success: ok,
         data: ok,

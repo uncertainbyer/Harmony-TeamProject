@@ -64,11 +64,11 @@ export class SessionManager {
     }
   }
 
-  static async autoLogin(): Promise<boolean> {
+  static async autoLogin(syncAfterLogin: boolean = true): Promise<boolean> {
     try {
       const creds: SavedCredential | null = await SessionManager.getSavedCredentials();
       if (creds === null) return false;
-      const result = await distributedApi.login(creds.username, creds.password);
+      const result = await distributedApi.login(creds.username, creds.password, syncAfterLogin);
       if (result.success) {
         console.info('[SessionManager] 自动登录成功');
         return true;

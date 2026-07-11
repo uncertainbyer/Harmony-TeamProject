@@ -285,7 +285,7 @@ export class DistributedService {
   }
 
   // ===== 登录 =====
-  async login(username: string, password: string): Promise<boolean> {
+  async login(username: string, password: string, syncAfterLogin: boolean = true): Promise<boolean> {
     this.currentState.state = SyncConnectionState.CONNECTING;
     this.emitState();
 
@@ -307,21 +307,7 @@ export class DistributedService {
       let response: ApiResponse<LoginResponse> = this.toApiResponse<LoginResponse>(responseObj);
       const loginData: LoginResponse = this.requireResponseData<LoginResponse>(response, '登录失败');
 
-      AppStorage.set<string>(DistributedService.AUTH_TOKEN_KEY, loginData.token);
-      AppStorage.set<string>(DistributedService.USER_ID_KEY, loginData.userId);
-
-      this.localDeviceId = loginData.userId;
-      this.currentState.lastMessage = '登录成功';
-      this.currentState.state = SyncConnectionState.CONNECTED;
-      this.emitState();
-
-      let self: DistributedService = this;
-      self.syncNow(true).catch((err: Error) => {
-        console.warn('[DistributedService] 首次同步失败:', err.message);
-      });
-      self.pollTask.start(DistributedService.POLL_INTERVAL, (): void => {
-        self.onPollTick();
-      });
+      this.applyLoginResponse(loginData, '登录成功', syncAfterLogin);
       return true;
     } catch (err) {
       this.currentState.state = SyncConnectionState.ERROR;
@@ -602,7 +588,7 @@ export class DistributedService {
 
     const postDataList: SyncPostData[] = [];
     for (let i = 0; i < postsToSync.length; i++) {
-      postDataList.push(SyncPostData.fromModel(postsToSync[i]));
+      postDataList.push(await this.createPostSyncData(postsToSync[i]));
     }
     const commentDataList: SyncCommentData[] = [];
     for (let i = 0; i < commentsToSync.length; i++) {
@@ -628,6 +614,25 @@ export class DistributedService {
     }
 
     return uploadData;
+  }
+
+  private async createPostSyncData(post: PostModel): Promise<SyncPostData> {
+    const data: SyncPostData = SyncPostData.fromModel(post);
+    const remoteImagePaths: string[] = [];
+    for (let i = 0; i < data.imagePaths.length; i++) {
+      const imagePath: string = data.imagePaths[i];
+      if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+        remoteImagePaths.push(imagePath);
+      } else if (imagePath.length > 0) {
+        const remoteUrl: string = await this.uploadSingleImage(
+          imagePath,
+          post.postId + '_' + i + '.jpg'
+        );
+        remoteImagePaths.push(remoteUrl);
+      }
+    }
+    data.imagePaths = remoteImagePaths;
+    return data;
   }
 
   private async pullRemoteData(): Promise<SyncDownloadResponse> {
@@ -704,7 +709,7 @@ export class DistributedService {
     this.emitState();
   }
 
-  private applyLoginResponse(data: LoginResponse, successMessage: string): void {
+  private applyLoginResponse(data: LoginResponse, successMessage: string, syncAfterLogin: boolean = true): void {
     AppStorage.set<string>(DistributedService.AUTH_TOKEN_KEY, data.token);
     AppStorage.set<string>(DistributedService.USER_ID_KEY, data.userId);
 
@@ -714,9 +719,11 @@ export class DistributedService {
     this.emitState();
 
     let self: DistributedService = this;
-    self.syncNow(true).catch((err: Error) => {
-      console.warn('[DistributedService] 首次同步失败:', err.message);
-    });
+    if (syncAfterLogin) {
+      self.syncNow(true).catch((err: Error) => {
+        console.warn('[DistributedService] 首次同步失败:', err.message);
+      });
+    }
     self.pollTask.start(DistributedService.POLL_INTERVAL, (): void => {
       self.onPollTick();
     });
@@ -769,6 +776,8 @@ export class DistributedService {
       const errorCode: number = error.code;
       if (errorCode === 28) {
         throw new Error('连接超时（错误码: 28），请检查服务器是否运行或防火墙是否开放端口');
+      } else if (errorCode === 2300007 || error.message.includes('could not connect')) {
+        throw new Error('无法连接服务器（错误码: ' + errorCode + '），请确认后端正在运行，且云服务器安全组已开放3000端口');
       } else if (errorCode === 7 || error.message.includes('resolve')) {
         throw new Error('DNS解析失败（错误码: ' + errorCode + '），请检查服务器地址是否正确');
       } else if (errorCode === 111 || error.message.includes('refused')) {

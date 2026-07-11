@@ -9,6 +9,7 @@ import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { common } from '@kit.AbilityKit';
 // ✅ 新增 import
 import { SessionManager } from '../common/SessionManager';
+import { SyncEventBus } from '../distributed/SyncEventBus';
 
 interface TabItemType {
   title: string;
@@ -51,6 +52,12 @@ struct SocialMediaMain {
   private feedIdCounter: number = 1;
   private pollingTimer: number = -1;
   private uiContext?: common.Context;
+  private syncEventBus: SyncEventBus = SyncEventBus.getInstance();
+  private remoteDataListener: () => void = (): void => {
+    this.loadFeed(true).catch((err: Error) => {
+      console.warn('[SocialMediaMain] 远端数据刷新失败:', err.message);
+    });
+  };
 
   private tabItems: Array<TabItemType> = [
     { title: '首页', icon: $r('app.media.home'), selectedIcon: $r('app.media.home_selected') },
@@ -70,6 +77,7 @@ struct SocialMediaMain {
   aboutToAppear(): void {
     try {
       this.uiContext = getContext(this);
+      this.syncEventBus.onRemoteDataChanged(this.remoteDataListener);
       this.initializeAsync();
     } catch (err) {
       this.initError = '初始化失败: ' + (err as Error).message;
@@ -81,6 +89,7 @@ struct SocialMediaMain {
       clearInterval(this.pollingTimer);
       this.pollingTimer = -1;
     }
+    this.syncEventBus.offRemoteDataChanged(this.remoteDataListener);
   }
 
   private async initializeAsync(): Promise<void> {
@@ -90,7 +99,11 @@ struct SocialMediaMain {
 
     // ✅ 自动登录
     try {
-      const autoLoggedIn: boolean = await SessionManager.autoLogin();
+      if (this.uiContext !== undefined) {
+        AppStorage.setOrCreate<object>('uiAbilityContext', this.uiContext);
+        await distributedApi.init(this.uiContext as common.UIAbilityContext);
+      }
+      const autoLoggedIn: boolean = await SessionManager.autoLogin(false);
       if (autoLoggedIn) {
         console.info('[SocialMediaMain] 自动登录成功');
         if (distributedApi.isReady() && !distributedApi.localDeviceId.startsWith('local_')) {
@@ -186,8 +199,10 @@ struct SocialMediaMain {
 
   async handlePublish(description: string, imageUrl: string): Promise<void> {
     try {
-      const userId: string = AppStorage.get<string>('user_id') || 'local_user';
-      const deviceId: string = AppStorage.get<string>('device_id') || 'local_device';
+      const isCloudLoggedIn: boolean = distributedApi.isReady() &&
+        !distributedApi.localDeviceId.startsWith('local_');
+      const userId: string = isCloudLoggedIn ? distributedApi.localDeviceId : 'local_user';
+      const deviceId: string = distributedApi.isReady() ? distributedApi.localDeviceId : 'local_device';
       const imagePaths: string[] = imageUrl.length > 0 ? [imageUrl] : [];
 
       const result = await postApi.publishWithAI(
@@ -801,10 +816,19 @@ interface HotTagType {
 @Component
 struct CategoryView {
   @State selectedCategory: string = '';
+  @State selectedCategoryId: string = '';
   @State showPhotos: boolean = false;
   @State currentPhotos: Array<PhotoItemType> = [];
   @State isLoadingCategory: boolean = false;
   @State categoryError: string = '';
+  private syncEventBus: SyncEventBus = SyncEventBus.getInstance();
+  private remoteDataListener: () => void = (): void => {
+    if (this.showPhotos && this.selectedCategoryId.length > 0) {
+      this.handleCategoryClick(this.selectedCategory, this.selectedCategoryId).catch((err: Error) => {
+        console.warn('[CategoryView] 远端分类刷新失败:', err.message);
+      });
+    }
+  };
 
   private categories: Array<CategoryItemType> = [
     { name: '风景', icon: '🌲', categoryId: 'cat_scenery' },
@@ -824,8 +848,17 @@ struct CategoryView {
     { tag: '#时尚穿搭', category: '人物', categoryId: 'cat_person' },
   ];
 
+  aboutToAppear(): void {
+    this.syncEventBus.onRemoteDataChanged(this.remoteDataListener);
+  }
+
+  aboutToDisappear(): void {
+    this.syncEventBus.offRemoteDataChanged(this.remoteDataListener);
+  }
+
   async handleCategoryClick(name: string, categoryId: string): Promise<void> {
     this.selectedCategory = name;
+    this.selectedCategoryId = categoryId;
     this.showPhotos = true;
     this.isLoadingCategory = true;
     this.categoryError = '';
@@ -897,7 +930,7 @@ struct CategoryView {
           Row() {
             Text('← 返回')
               .fontSize(15).fontColor('#FFD700')
-              .onClick(() => { this.showPhotos = false; this.selectedCategory = ''; })
+              .onClick(() => { this.showPhotos = false; this.selectedCategory = ''; this.selectedCategoryId = ''; })
               .margin({ right: 12 })
             Text(this.selectedCategory)
               .fontSize(20).fontWeight(FontWeight.Bold).fontColor('#1A1A2E')
@@ -955,14 +988,28 @@ struct ProfileView {
 
   async aboutToAppear(): Promise<void> {
     try {
-      const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
-      AppStorage.setOrCreate<object>('uiAbilityContext', context);
-      await distributedApi.init(context);
-      this.isLoggedIn = distributedApi.isReady() && !distributedApi.localDeviceId.startsWith('local_');
+      await this.ensureCloudLogin(true);
     } catch (err) {
       console.warn('[ProfileView] 云同步初始化失败:', (err as Error).message);
       this.isLoggedIn = false;
     }
+  }
+
+  private isCloudLoggedIn(): boolean {
+    return distributedApi.isReady() && !distributedApi.localDeviceId.startsWith('local_');
+  }
+
+  private async ensureCloudLogin(trySavedCredentials: boolean): Promise<boolean> {
+    const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+    AppStorage.setOrCreate<object>('uiAbilityContext', context);
+    await distributedApi.init(context);
+
+    if (!this.isCloudLoggedIn() && trySavedCredentials) {
+      await SessionManager.autoLogin(false);
+    }
+
+    this.isLoggedIn = this.isCloudLoggedIn();
+    return this.isLoggedIn;
   }
 
   async handleLogin(): Promise<void> {
@@ -1027,13 +1074,22 @@ struct ProfileView {
   }
 
   async handleSync(): Promise<void> {
-    if (!this.isLoggedIn) {
+    const readyToSync: boolean = await this.ensureCloudLogin(true);
+    if (!readyToSync) {
       promptAction.showToast({ message: '请先登录', duration: 2000 });
       return;
     }
     try {
-      const result = await distributedApi.sync(true);
+      let result = await distributedApi.sync(true);
+      if (!result.success && result.errorMsg === '登录已过期，请重新登录') {
+        const reloginOk: boolean = await SessionManager.autoLogin(false);
+        this.isLoggedIn = reloginOk && distributedApi.isReady() && !distributedApi.localDeviceId.startsWith('local_');
+        if (reloginOk) {
+          result = await distributedApi.sync(true);
+        }
+      }
       if (result.success) {
+        this.isLoggedIn = true;
         promptAction.showToast({ message: '同步成功，共 ' + result.syncCount + ' 条', duration: 2000 });
       } else {
         this.isLoggedIn = distributedApi.isReady() && !distributedApi.localDeviceId.startsWith('local_');
