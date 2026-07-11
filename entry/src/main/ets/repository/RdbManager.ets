@@ -47,6 +47,8 @@ export class RdbManager {
       await this.createTables();
       await this.initDefaultCategories();
       console.info('[RdbManager] 数据库初始化成功');
+      await this.rdbStore!.executeSql("ALTER TABLE post_info DROP COLUMN liked_by");
+      console.info('[RdbManager] 处理旧列 liked_by 完成');
     } catch (err) {
       const errorMsg: string = (err as Error).message;
       console.error('[RdbManager] 数据库初始化失败:', errorMsg);

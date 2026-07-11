@@ -15,10 +15,21 @@ export class PostRepository {
    * @returns 插入的行ID
    */
   async insertPost(post: PostModel): Promise<number> {
-    const rowId: number = await this.rdbManager.insert(
+    console.info("===== Post =====");
+    console.info(JSON.stringify(post));
+
+    console.info("imagePaths = " + post.imagePaths);
+    console.info("typeof imagePaths = " + typeof post.imagePaths);
+
+    const bucket = post.toValuesBucket();
+    console.info(JSON.stringify(bucket));
+    console.info("typeof bucket.image_paths = " + typeof bucket["image_paths"]);
+
+    const rowId = await this.rdbManager.insert(
       PostModel.getTableName(),
-      post.toValuesBucket()
+      bucket
     );
+
     return rowId;
   }
 
