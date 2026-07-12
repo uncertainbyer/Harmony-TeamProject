@@ -462,36 +462,33 @@ class DistributedApi {
           const sp: Record<string, Object> = serverPosts[i];
           const spId: string = (sp['postId'] as string) || '';
           if (spId.length > 0) {
-            const existingPost: PostModel | null = await postRepo.queryPostById(spId);
-            if (existingPost === null) {
-              const post: PostModel = new PostModel();
-              post.postId = spId;
-              post.userId = (sp['userId'] as string) || '';
-              post.userName = (sp['userName'] as string) || '';
-              post.userAvatar = (sp['userAvatar'] as string) || '';
-              post.content = (sp['content'] as string) || '';
-              const rawImagePaths: Object | undefined = sp['imagePaths'];
-              if (typeof rawImagePaths === 'string') {
-                post.imagePaths = rawImagePaths as string;
-              } else {
-                try {
-                  post.imagePaths = JSON.stringify(rawImagePaths);
-                } catch (_) {
-                  post.imagePaths = '[]';
-                }
+            const post: PostModel = new PostModel();
+            post.postId = spId;
+            post.userId = (sp['userId'] as string) || '';
+            post.userName = (sp['userName'] as string) || '';
+            post.userAvatar = (sp['userAvatar'] as string) || '';
+            post.content = (sp['content'] as string) || '';
+            const rawImagePaths: Object | undefined = sp['imagePaths'];
+            if (typeof rawImagePaths === 'string') {
+              post.imagePaths = rawImagePaths as string;
+            } else {
+              try {
+                post.imagePaths = JSON.stringify(rawImagePaths);
+              } catch (_) {
+                post.imagePaths = '[]';
               }
-              post.imageCount = (sp['imageCount'] as number) || 0;
-              post.categoryId = (sp['categoryId'] as string) || '';
-              post.categoryName = (sp['categoryName'] as string) || '';
-              post.likeCount = (sp['likeCount'] as number) || 0;
-              post.commentCount = (sp['commentCount'] as number) || 0;
-              post.createTime = (sp['createTime'] as number) || Date.now();
-              post.updateTime = (sp['updateTime'] as number) || Date.now();
-              post.deviceId = (sp['deviceId'] as string) || '';
-              post.syncStatus = 1;
-              await postRepo.insertPost(post);
-              totalSynced++;
             }
+            post.imageCount = (sp['imageCount'] as number) || 0;
+            post.categoryId = (sp['categoryId'] as string) || '';
+            post.categoryName = (sp['categoryName'] as string) || '';
+            post.likeCount = (sp['likeCount'] as number) || 0;
+            post.commentCount = (sp['commentCount'] as number) || 0;
+            post.createTime = (sp['createTime'] as number) || Date.now();
+            post.updateTime = (sp['updateTime'] as number) || Date.now();
+            post.deviceId = (sp['deviceId'] as string) || '';
+            post.syncStatus = 1;
+            const upserted: boolean = await postRepo.upsertRemotePost(post);
+            if (upserted) totalSynced++;
           }
         }
 
@@ -499,20 +496,17 @@ class DistributedApi {
           const sc: Record<string, Object> = serverComments[i];
           const scId: string = (sc['commentId'] as string) || '';
           if (scId.length > 0) {
-            const existingComment = await commentRepo.queryCommentById(scId);
-            if (existingComment === null) {
-              const comment: CommentModel = new CommentModel();
-              comment.commentId = scId;
-              comment.postId = (sc['postId'] as string) || '';
-              comment.userId = (sc['userId'] as string) || '';
-              comment.userName = (sc['userName'] as string) || '';
-              comment.content = (sc['content'] as string) || '';
-              comment.createTime = (sc['createTime'] as number) || Date.now();
-              comment.deviceId = (sc['deviceId'] as string) || '';
-              comment.syncStatus = 1;
-              await commentRepo.insertComment(comment);
-              totalSynced++;
-            }
+            const comment: CommentModel = new CommentModel();
+            comment.commentId = scId;
+            comment.postId = (sc['postId'] as string) || '';
+            comment.userId = (sc['userId'] as string) || '';
+            comment.userName = (sc['userName'] as string) || '';
+            comment.content = (sc['content'] as string) || '';
+            comment.createTime = (sc['createTime'] as number) || Date.now();
+            comment.deviceId = (sc['deviceId'] as string) || '';
+            comment.syncStatus = 1;
+            const upserted: boolean = await commentRepo.upsertRemoteComment(comment);
+            if (upserted) totalSynced++;
           }
         }
       }

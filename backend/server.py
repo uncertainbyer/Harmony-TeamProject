@@ -285,6 +285,7 @@ class SocialPhotoHandler(BaseHTTPRequestHandler):
             "/api/images/upload": self.handle_image_upload,
             "/api/sync/upload": self.handle_sync_upload,
             "/api/sync/download": self.handle_sync_download,
+            "/api/clear": self.handle_clear,
         }
         handler = routes.get(path)
         if handler is None:
@@ -634,6 +635,16 @@ class SocialPhotoHandler(BaseHTTPRequestHandler):
             values,
         )
         return comment_id
+
+    def handle_clear(self, body: Dict[str, Any]) -> None:
+        user = self.authenticate()
+        if user is None:
+            return
+        with connect_db() as conn:
+            conn.execute("DELETE FROM posts WHERE owner_user_id = ?", (user["id"],))
+            conn.execute("DELETE FROM comments WHERE owner_user_id = ?", (user["id"],))
+            conn.execute("DELETE FROM images WHERE owner_user_id = ?", (user["id"],))
+        self.send_api(True, "all data cleared", {})
 
     def handle_sync_download(self, body: Dict[str, Any]) -> None:
         user = self.authenticate()
