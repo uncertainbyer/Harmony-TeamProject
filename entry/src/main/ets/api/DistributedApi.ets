@@ -417,58 +417,45 @@ class DistributedApi {
       const unsyncedPosts: PostModel[] = await postRepo.queryUnsyncedPosts();
       const unsyncedComments: CommentModel[] = await commentRepo.queryUnsyncedComments();
 
-      // 构建上传 body — 手动构建 JSON 字符串避免 Record<string, Object> 序列化数组问题
-      let uploadJson: string = '';
-      if (unsyncedPosts.length === 0 && unsyncedComments.length === 0) {
-        uploadJson = '{"deviceId":"' + this.localDeviceId.replace(/"/g, '\\"') + '"}';
-      } else {
-        let postsJson: string = '[]';
-        if (unsyncedPosts.length > 0) {
-          postsJson = '[';
-          for (let pi = 0; pi < unsyncedPosts.length; pi++) {
-            const p: PostModel = unsyncedPosts[pi];
-            if (pi > 0) postsJson += ',';
-            const imgArr: string[] = p.getImagePathArray();
-            let imgArrJson: string = '[]';
-            try { imgArrJson = JSON.stringify(imgArr); } catch (_) {}
-            const imgJson: string = '"' + imgArrJson.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
-            const content: string = p.content.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-            postsJson += '{"postId":"' + p.postId.replace(/"/g, '\\"') +
-              '","userId":"' + p.userId.replace(/"/g, '\\"') +
-              '","userName":"' + p.userName.replace(/"/g, '\\"') +
-              '","userAvatar":"' + p.userAvatar.replace(/"/g, '\\"') +
-              '","content":"' + content + '","imagePaths":' + imgJson +
-              ',"imageCount":' + p.imageCount +
-              ',"categoryId":"' + p.categoryId.replace(/"/g, '\\"') +
-              '","categoryName":"' + p.categoryName.replace(/"/g, '\\"') +
-              '","likeCount":' + p.likeCount +
-              '","commentCount":' + p.commentCount +
-              ',"createTime":' + p.createTime +
-              ',"updateTime":' + p.updateTime +
-              ',"deviceId":"' + p.deviceId.replace(/"/g, '\\"') +
-              ',"isDeleted":' + (p.isDeleted ? 'true' : 'false') + '}';
-          }
-          postsJson += ']';
-        }
-        let commentsJson: string = '[]';
-        if (unsyncedComments.length > 0) {
-          commentsJson = '[';
-          for (let ci = 0; ci < unsyncedComments.length; ci++) {
-            const c: CommentModel = unsyncedComments[ci];
-            if (ci > 0) commentsJson += ',';
-            const content: string = c.content.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-            commentsJson += '{"commentId":"' + c.commentId.replace(/"/g, '\\"') +
-              '","postId":"' + c.postId.replace(/"/g, '\\"') +
-              '","userId":"' + c.userId.replace(/"/g, '\\"') +
-              '","userName":"' + c.userName.replace(/"/g, '\\"') +
-              '","content":"' + content + '","createTime":' + c.createTime +
-              ',"deviceId":"' + c.deviceId.replace(/"/g, '\\"') + '"}';
-          }
-          commentsJson += ']';
-        }
-        uploadJson = '{"deviceId":"' + this.localDeviceId.replace(/"/g, '\\"') +
-          '","posts":' + postsJson + ',"comments":' + commentsJson + '}';
+      // 构建上传 body — 用 JSON.stringify 保证正确转义
+      const uploadData: Record<string, Object> = {};
+      uploadData['deviceId'] = this.localDeviceId;
+      uploadData['posts'] = [];
+      uploadData['comments'] = [];
+      for (let pi = 0; pi < unsyncedPosts.length; pi++) {
+        const p: PostModel = unsyncedPosts[pi];
+        const postItem: Record<string, Object> = {};
+        postItem['postId'] = p.postId;
+        postItem['userId'] = p.userId;
+        postItem['userName'] = p.userName;
+        postItem['userAvatar'] = p.userAvatar;
+        postItem['content'] = p.content;
+        postItem['imagePaths'] = p.getImagePathArray();
+        postItem['imageCount'] = p.imageCount;
+        postItem['categoryId'] = p.categoryId;
+        postItem['categoryName'] = p.categoryName;
+        postItem['likeCount'] = p.likeCount;
+        postItem['commentCount'] = p.commentCount;
+        postItem['createTime'] = p.createTime;
+        postItem['updateTime'] = p.updateTime;
+        postItem['deviceId'] = p.deviceId;
+        postItem['isDeleted'] = p.isDeleted;
+        (uploadData['posts'] as Record<string, Object>[]).push(postItem);
       }
+      for (let ci = 0; ci < unsyncedComments.length; ci++) {
+        const c: CommentModel = unsyncedComments[ci];
+        const commentItem: Record<string, Object> = {};
+        commentItem['commentId'] = c.commentId;
+        commentItem['postId'] = c.postId;
+        commentItem['userId'] = c.userId;
+        commentItem['userName'] = c.userName;
+        commentItem['content'] = c.content;
+        commentItem['createTime'] = c.createTime;
+        commentItem['deviceId'] = c.deviceId;
+        commentItem['isDeleted'] = c.isDeleted;
+        (uploadData['comments'] as Record<string, Object>[]).push(commentItem);
+      }
+      const uploadJson: string = JSON.stringify(uploadData);
 
       console.info('[DistributedApi] 上传帖子: ' + unsyncedPosts.length + ' 条');
       if (unsyncedPosts.length > 0) {
@@ -574,6 +561,8 @@ class DistributedApi {
             if (upserted) totalSynced++;
           }
         }
+
+        console.info('[DistributedApi] 下载完成: posts=' + serverPosts.length + ', comments=' + serverComments.length + ', liked=' + (downloadResult.likedPostIds || []).length);
 
         const likedPostIds: string[] = downloadResult.likedPostIds || [];
         if (likedPostIds.length > 0) {

@@ -732,7 +732,8 @@ struct SocialMediaMain {
               onLogin: async (): Promise<void> => {
                 await this.refreshLikedDataAfterLogin();
                 await this.loadFeed(true);
-              }
+              },
+              onSyncComplete: (): void => { this.loadFeed(true); }
             })
           }
         }
@@ -1810,6 +1811,7 @@ struct ProfileView {
   onAvatarChange: (newAvatar: string) => void = () => {};
   onLogout?: () => void;
   onLogin?: () => void;
+  onSyncComplete?: () => void;
 
   @StorageLink('display_bio') displayBio: string = '这个人很懒，什么都没有写...';
   @StorageLink('is_logged_in') isLoggedIn: boolean = false;
@@ -1989,10 +1991,13 @@ struct ProfileView {
       return;
     }
     try {
-      // ★ 调用 sync(true) 触发全量同步
       const result = await distributedApi.sync(true);
       if (result.success) {
         promptAction.showToast({ message: '同步成功，共 ' + result.syncCount + ' 条', duration: 2000 });
+        this.onLoadMyWorks();
+        if (this.onSyncComplete) {
+          this.onSyncComplete();
+        }
       } else {
         promptAction.showToast({ message: '同步失败: ' + result.errorMsg, duration: 2000 });
       }
