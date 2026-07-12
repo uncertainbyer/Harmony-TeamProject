@@ -41,6 +41,9 @@ export class Constants {
 
   /** 动画时长（毫秒） */
   static readonly ANIMATION_DURATION: number = 300;
+
+  /** 服务器基础地址（根据实际部署修改） */
+  static readonly BASE_URL: string = 'http://39.105.115.19:3000';
 }
 
 /**

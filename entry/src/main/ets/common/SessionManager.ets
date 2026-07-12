@@ -1,83 +1,105 @@
-// entry/src/main/ets/common/SessionManager.ets
+// common/SessionManager.ts
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
-import { distributedApi } from '../api/DistributedApi';
 
-const PREF_NAME: string = 'session_pref';
-const KEY_USERNAME: string = 'username';
-const KEY_PASSWORD: string = 'password';
+const PREFS_NAME: string = 'SessionPrefs';
+const KEY_USERNAME: string = 'login_username';
+const KEY_PASSWORD: string = 'login_password';
 
-export class SavedCredential {
-  username: string = '';
-  password: string = '';
+class SessionManagerImpl {
+  /**
+   * 获取保存的用户名
+   */
+  async getSavedUsername(): Promise<string> {
+    try {
+      const context: common.Context =
+        AppStorage.get<common.Context>('globalAbilityContext') as common.Context;
+      const options: preferences.Options = { name: PREFS_NAME };
+      const prefs: preferences.Preferences = preferences.getPreferencesSync(context, options);
+      const username: string = prefs.getSync(KEY_USERNAME, '') as string;
+      return username;
+    } catch (e) {
+      console.warn('[SessionManager] getSavedUsername 失败:', (e as Error).message);
+      return '';
+    }
+  }
+
+  /**
+   * 获取保存的密码
+   */
+  async getSavedPassword(): Promise<string> {
+    try {
+      const context: common.Context =
+        AppStorage.get<common.Context>('globalAbilityContext') as common.Context;
+      const options: preferences.Options = { name: PREFS_NAME };
+      const prefs: preferences.Preferences = preferences.getPreferencesSync(context, options);
+      const password: string = prefs.getSync(KEY_PASSWORD, '') as string;
+      return password;
+    } catch (e) {
+      console.warn('[SessionManager] getSavedPassword 失败:', (e as Error).message);
+      return '';
+    }
+  }
+
+  /**
+   * 保存登录凭据
+   */
+  async saveCredentials(username: string, password: string): Promise<void> {
+    try {
+      const context: common.Context =
+        AppStorage.get<common.Context>('globalAbilityContext') as common.Context;
+      const options: preferences.Options = { name: PREFS_NAME };
+      const prefs: preferences.Preferences = preferences.getPreferencesSync(context, options);
+      prefs.putSync(KEY_USERNAME, username);
+      prefs.putSync(KEY_PASSWORD, password);
+      prefs.flush();
+      // 同步写入 AppStorage
+      AppStorage.set<string>(KEY_USERNAME, username);
+      console.info('[SessionManager] 已保存凭据，用户名: ' + username);
+    } catch (e) {
+      console.warn('[SessionManager] saveCredentials 失败:', (e as Error).message);
+    }
+  }
+
+  /**
+   * 清除登录凭据
+   */
+  async clearCredentials(): Promise<void> {
+    try {
+      const context: common.Context =
+        AppStorage.get<common.Context>('globalAbilityContext') as common.Context;
+      const options: preferences.Options = { name: PREFS_NAME };
+      const prefs: preferences.Preferences = preferences.getPreferencesSync(context, options);
+      prefs.putSync(KEY_USERNAME, '');
+      prefs.putSync(KEY_PASSWORD, '');
+      prefs.flush();
+      console.info('[SessionManager] 已清除凭据');
+    } catch (e) {
+      console.warn('[SessionManager] clearCredentials 失败:', (e as Error).message);
+    }
+  }
+
+  /**
+   * 自动登录：凭据存在则自动登录
+   */
+  // common/SessionManager.ts — autoLogin 方法
+
+  async autoLogin(): Promise<boolean> {
+    try {
+      const username: string = await this.getSavedUsername();
+      if (username.length === 0) {
+        return false;
+      }
+
+      // ★ 写入 AppStorage 和 PersistentStorage
+      AppStorage.set<string>('login_username', username);
+      console.info('[SessionManager] 自动登录: ' + username);
+      return true;
+    } catch (e) {
+      console.warn('[SessionManager] autoLogin 失败:', (e as Error).message);
+      return false;
+    }
+  }
 }
 
-export class SessionManager {
-
-  private static async getPrefs(): Promise<preferences.Preferences> {
-    const maybeCtx: common.Context | undefined = AppStorage.get<common.Context>('uiAbilityContext');
-    if (maybeCtx === undefined) {
-      throw new Error('uiAbilityContext not found');
-    }
-    return await preferences.getPreferences(maybeCtx, PREF_NAME);
-  }
-
-  static async saveCredentials(username: string, password: string): Promise<void> {
-    try {
-      const prefs: preferences.Preferences = await SessionManager.getPrefs();
-      await prefs.put(KEY_USERNAME, username);
-      await prefs.put(KEY_PASSWORD, password);
-      await prefs.flush();
-      console.info('[SessionManager] 登录信息已保存');
-    } catch (err) {
-      console.error('[SessionManager] 保存失败:', (err as Error).message);
-    }
-  }
-
-  static async getSavedCredentials(): Promise<SavedCredential | null> {
-    try {
-      const prefs: preferences.Preferences = await SessionManager.getPrefs();
-      const username: string = await prefs.get(KEY_USERNAME, '') as string;
-      const password: string = await prefs.get(KEY_PASSWORD, '') as string;
-      if (username.length > 0 && password.length > 0) {
-        const cred: SavedCredential = new SavedCredential();
-        cred.username = username;
-        cred.password = password;
-        return cred;
-      }
-      return null;
-    } catch (err) {
-      console.error('[SessionManager] 读取失败:', (err as Error).message);
-      return null;
-    }
-  }
-
-  static async clearCredentials(): Promise<void> {
-    try {
-      const prefs: preferences.Preferences = await SessionManager.getPrefs();
-      await prefs.delete(KEY_USERNAME);
-      await prefs.delete(KEY_PASSWORD);
-      await prefs.flush();
-      console.info('[SessionManager] 登录信息已清除');
-    } catch (err) {
-      console.error('[SessionManager] 清除失败:', (err as Error).message);
-    }
-  }
-
-  static async autoLogin(): Promise<boolean> {
-    try {
-      const creds: SavedCredential | null = await SessionManager.getSavedCredentials();
-      if (creds === null) return false;
-      const result = await distributedApi.login(creds.username, creds.password);
-      if (result.success) {
-        console.info('[SessionManager] 自动登录成功');
-        return true;
-      }
-      console.warn('[SessionManager] 自动登录失败:', result.message);
-      return false;
-    } catch (err) {
-      console.error('[SessionManager] 自动登录异常:', (err as Error).message);
-      return false;
-    }
-  }
-}
+export const SessionManager = new SessionManagerImpl();

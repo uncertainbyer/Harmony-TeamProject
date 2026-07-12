@@ -12,7 +12,7 @@ import { SyncEventBus, SyncRequestListener } from '../distributed/SyncEventBus';
 import {
   SyncAnnouncement, SyncCommentData, SyncPostData, SyncEnvelope
 } from '../distributed/SyncProtocol';
-
+import { photoAccessHelper } from '@kit.MediaLibraryKit';
 // ===== 枚举 =====
 
 export enum SyncConnectionState {
@@ -57,6 +57,11 @@ export interface LoginResponse {
   userId: string;
   token: string;
   expiresAt: number;
+
+  // ★ 新增：显示昵称、头像、个性签名
+  displayNickname: string;
+  avatar: string;
+  bio: string;
 }
 
 export interface SyncUploadResponse {
@@ -72,6 +77,12 @@ export interface SyncDownloadResponse {
 
 export interface UploadImageResponse {
   remoteUrls: string[];
+}
+
+export interface ProfileData {
+  displayNickname: string;
+  avatar: string;
+  bio: string;
 }
 
 export interface ApiResponse<T> {
@@ -154,11 +165,13 @@ class PollingTask {
       return;
     }
     this.running = true;
+    // ★ 修复：直接使用箭头函数，不要赋值给变量
     let self: PollingTask = this;
-    let loop: () => void = (): void => {
+    let loop = (): void => {
       if (!self.running) {
         return;
       }
+      // ★ 直接调用 callback
       callback();
       self.timerId = setTimeout(loop, intervalMs);
     };
@@ -178,37 +191,74 @@ class PollingTask {
  * 分布式同步中心（云服务器模式）
  * 使用 @ohos.net.http + HTTP 明文请求
  */
+interface GeneratedTypeLiteralInterface_1 {
+  displayNickname: string;
+  avatar: string;
+  bio: string;
+}
+
+interface GeneratedTypeLiteralInterface_2 {
+  displayNickname: string;
+  avatar: string;
+  bio: string;
+}
+
+interface GeneratedTypeLiteralInterface_3 {
+  displayNickname: string;
+  avatar: string;
+  bio: string;
+}
+
+interface GeneratedTypeLiteralInterface_4 {
+  displayNickname?: string;
+  avatar?: string;
+  bio?: string;
+}
+
+interface GeneratedTypeLiteralInterface_5 {
+  displayNickname: string;
+  avatar: string;
+  bio: string;
+}
+
+interface GeneratedTypeLiteralInterface_6 {
+  displayNickname: string;
+  avatar: string;
+  bio: string;
+}
+
+interface GeneratedTypeLiteralInterface_7 {
+  displayNickname: string;
+  avatar: string;
+  bio: string;
+}
+
 export class DistributedService {
   private static instance: DistributedService | null = null;
   private context: common.UIAbilityContext | null = null;
-
-  // ⭐ 使用 HTTP（不是 HTTPS）
-  private static readonly API_BASE: string = 'http://39.106.70.214:3000/api';
+  // ★ 改：服务器地址改为 39.105.115.19
+  private static readonly API_BASE: string = 'http://39.105.115.19:3000/api';
   private static readonly AUTH_TOKEN_KEY: string = 'cloud_sync_token';
   private static readonly USER_ID_KEY: string = 'cloud_user_id';
   private static readonly LAST_SYNC_KEY: string = 'cloud_last_sync';
   private static readonly POLL_INTERVAL: number = 30000;
-
-  // ⭐ 使用 @ohos.net.http
+  // 使用 @ohos.net.http
   private httpClient: http.HttpRequest | null = null;
-
   private postRepository: PostRepository = new PostRepository();
   private commentRepository: CommentRepository = new CommentRepository();
   private eventBus: SyncEventBus = SyncEventBus.getInstance();
-
   public deviceMap: Map<string, SyncDeviceInfo> = new Map<string, SyncDeviceInfo>();
   public localDeviceId: string = '';
-
   private stateListeners: SyncStateListener[] = [];
   private currentState: DistributedSyncState = new DistributedSyncState();
   private initialized: boolean = false;
   private syncing: boolean = false;
   private syncAgain: boolean = false;
   private pollTask: PollingTask = new PollingTask();
-
   private syncRequestListener: SyncRequestListener = this.onSyncRequestedInternal.bind(this);
 
-  private constructor() {}
+  private constructor() {
+  }
 
   static getInstance(): DistributedService {
     if (DistributedService.instance === null) {
@@ -223,7 +273,6 @@ export class DistributedService {
     }
     this.context = context;
 
-    // ⭐ 创建 HTTP 客户端
     if (this.httpClient === null) {
       this.httpClient = http.createHttp();
     }
@@ -257,6 +306,11 @@ export class DistributedService {
 
   getLocalDeviceId(): string {
     return this.localDeviceId;
+  }
+
+  isLoggedIn(): boolean {
+    const token: string | undefined = AppStorage.get<string>(DistributedService.AUTH_TOKEN_KEY);
+    return token !== undefined && token.length > 0;
   }
 
   onStateChanged(listener: SyncStateListener): void {
@@ -309,10 +363,22 @@ export class DistributedService {
         throw new Error(response.message);
       }
 
-      AppStorage.set<string>(DistributedService.AUTH_TOKEN_KEY, response.data.token);
-      AppStorage.set<string>(DistributedService.USER_ID_KEY, response.data.userId);
+      AppStorage.setOrCreate<string>(DistributedService.AUTH_TOKEN_KEY, response.data.token);
+      AppStorage.setOrCreate<string>(DistributedService.USER_ID_KEY, response.data.userId);
 
       this.localDeviceId = response.data.userId;
+
+      // ★ 保存服务器返回的个人资料
+      if (response.data.displayNickname) {
+        AppStorage.set<string>('display_nickname', response.data.displayNickname);
+      }
+      if (response.data.avatar) {
+        AppStorage.set<string>('display_avatar', response.data.avatar);
+      }
+      if (response.data.bio) {
+        AppStorage.set<string>('display_bio', response.data.bio);
+      }
+
       this.currentState.lastMessage = '登录成功';
       this.currentState.state = SyncConnectionState.CONNECTED;
       this.emitState();
@@ -356,12 +422,56 @@ export class DistributedService {
         throw new Error(response.message);
       }
 
-      this.applyLoginResponse(response.data, '注册成功');
+      // ★★★ 关键：调试日志，看服务器到底返回了什么 ★★★
+      console.info('[DEBUG REGISTER] ====== 服务器返回数据 ======');
+      console.info('[DEBUG REGISTER] token原始值:', JSON.stringify(response.data.token));
+      console.info('[DEBUG REGISTER] userId原始值:', JSON.stringify(response.data.userId));
+      console.info('[DEBUG REGISTER] displayNickname:', JSON.stringify(response.data.displayNickname));
+      console.info('[DEBUG REGISTER] avatar:', JSON.stringify(response.data.avatar));
+      console.info('[DEBUG REGISTER] bio:', JSON.stringify(response.data.bio));
+
+      // ★★★ 直接保存 token 和 userId 到 AppStorage ★★★
+      AppStorage.setOrCreate<string>(DistributedService.AUTH_TOKEN_KEY, response.data.token);
+      AppStorage.setOrCreate<string>(DistributedService.USER_ID_KEY, response.data.userId);
+      this.localDeviceId = response.data.userId;
+
+      // ★★★ 验证保存是否成功 ★★★
+      console.info('[DEBUG REGISTER] 保存后AppStorage验证:');
+      console.info('[DEBUG REGISTER] cloud_sync_token:', JSON.stringify(AppStorage.get<string>(DistributedService.AUTH_TOKEN_KEY)));
+      console.info('[DEBUG REGISTER] cloud_user_id:', JSON.stringify(AppStorage.get<string>(DistributedService.USER_ID_KEY)));
+
+      // 保存服务器分配的显示昵称和默认资料
+      if (response.data.displayNickname) {
+        AppStorage.set<string>('display_nickname', response.data.displayNickname);
+        console.info('[DistributedService] 服务器分配显示昵称: ' + response.data.displayNickname);
+      }
+      if (response.data.avatar !== undefined) {
+        AppStorage.set<string>('display_avatar', response.data.avatar);
+      }
+      if (response.data.bio) {
+        AppStorage.set<string>('display_bio', response.data.bio);
+      }
+
+      // 更新状态
+      this.currentState.lastMessage = '注册成功';
+      this.currentState.state = SyncConnectionState.CONNECTED;
+      this.emitState();
+
+      // 启动同步和轮询（捕获错误避免影响注册流程）
+      let self: DistributedService = this;
+      self.syncNow(true).catch((err: Error) => {
+        console.warn('[DistributedService] 注册后首次同步失败:', err.message);
+      });
+      self.pollTask.start(DistributedService.POLL_INTERVAL, (): void => {
+        self.onPollTick();
+      });
+
       return true;
     } catch (err) {
       this.currentState.state = SyncConnectionState.ERROR;
       const error: BusinessError = err as BusinessError;
       this.currentState.lastMessage = '注册失败: ' + error.message;
+      console.error('[DistributedService] ❌ 注册失败:', error.message);
       this.emitState();
       return false;
     }
@@ -406,10 +516,9 @@ export class DistributedService {
       return result;
     }
 
-    // ⭐ 修复：改为判断 localDeviceId 是否来自登录
-    //    登录后 localDeviceId = 服务器返回的 userId（不以 "local_" 开头）
-    //    未登录时 localDeviceId = "local_xxx"
-    if (this.localDeviceId.startsWith('local_')) {
+    // ★ 使用 AppStorage 检查 token
+    const token: string | undefined = AppStorage.get<string>(DistributedService.AUTH_TOKEN_KEY);
+    if (token === undefined || token.length === 0) {
       result.errorMsg = '未登录';
       return result;
     }
@@ -483,6 +592,51 @@ export class DistributedService {
     return remoteUrls;
   }
 
+  // ★ 修改：获取用户个人资料
+  async getProfile(): Promise<ProfileData> {
+    const responseObj: Record<string, Object> = await this.get('/auth/profile');
+    const response: ApiResponse<ProfileData> =
+      this.toApiResponse<ProfileData>(responseObj);
+    if (!response.success) {
+      throw new Error(response.message);
+    }
+    // 更新本地缓存
+    if (response.data.displayNickname) {
+      AppStorage.set<string>('display_nickname', response.data.displayNickname!);
+    }
+    if (response.data.avatar) {
+      AppStorage.set<string>('display_avatar', response.data.avatar!);
+    }
+    if (response.data.bio) {
+      AppStorage.set<string>('display_bio', response.data.bio!);
+    }
+    return response.data;
+  }
+
+  // ★ 修改：更新用户个人资料
+  async updateProfile(data: ProfileData): Promise<ProfileData> {
+    const responseObj: Record<string, Object> = await this.put(
+      '/auth/profile',
+      JsonSafe.stringify(data)
+    );
+    const response: ApiResponse<ProfileData> =
+      this.toApiResponse<ProfileData>(responseObj);
+    if (!response.success) {
+      throw new Error(response.message);
+    }
+    // 更新本地缓存
+    if (response.data.displayNickname) {
+      AppStorage.set<string>('display_nickname', response.data.displayNickname!);
+    }
+    if (response.data.avatar) {
+      AppStorage.set<string>('display_avatar', response.data.avatar!);
+    }
+    if (response.data.bio) {
+      AppStorage.set<string>('display_bio', response.data.bio!);
+    }
+    return response.data;
+  }
+
   // ===== 释放资源 =====
   async release(): Promise<void> {
     this.pollTask.stop();
@@ -533,31 +687,67 @@ export class DistributedService {
   }
 
   private async uploadSingleImage(localUri: string, fileName: string): Promise<string> {
-    const file: fs.File = fs.openSync(localUri, fs.OpenMode.READ_ONLY);
-    const stat: fs.Stat = fs.statSync(localUri);
-    const buf: ArrayBuffer = new ArrayBuffer(stat.size);
-    fs.readSync(file.fd, buf);
-    fs.closeSync(file);
+    console.info('[DEBUG uploadSingleImage] URI:', localUri);
 
-    const uint8Array: Uint8Array = new Uint8Array(buf);
-    let binaryStr: string = '';
-    for (let i = 0; i < uint8Array.byteLength; i++) {
-      binaryStr += String.fromCharCode(uint8Array[i]);
+    // ★ 用按块读取的方式获取文件内容，避免 statSync 不支持 file:// URI
+    let file: fs.File | undefined = undefined;
+    try {
+      file = fs.openSync(localUri, fs.OpenMode.READ_ONLY);
+
+      // 按 64KB 块读取
+      const chunkSize: number = 65536;
+      const chunks: Uint8Array[] = [];
+      let totalSize: number = 0;
+
+      while (true) {
+        const buf: ArrayBuffer = new ArrayBuffer(chunkSize);
+        const readLen: number = fs.readSync(file.fd, buf);
+        if (readLen <= 0) {
+          break;
+        }
+        const chunk: Uint8Array = new Uint8Array(buf.slice(0, readLen));
+        chunks.push(chunk);
+        totalSize += readLen;
+      }
+
+      console.info('[DEBUG uploadSingleImage] 文件大小:', totalSize);
+
+      // 合并所有块
+      const fullBuf: Uint8Array = new Uint8Array(totalSize);
+      let offset: number = 0;
+      for (let i = 0; i < chunks.length; i++) {
+        fullBuf.set(chunks[i], offset);
+        offset += chunks[i].byteLength;
+      }
+
+      fs.closeSync(file);
+      file = undefined;
+
+      // 转 base64
+      let binaryStr: string = '';
+      for (let i = 0; i < fullBuf.byteLength; i++) {
+        binaryStr += String.fromCharCode(fullBuf[i]);
+      }
+      const base64: string = btoa(binaryStr);
+
+      let uploadBody: UploadImageBody = {
+        fileName: fileName,
+        fileData: base64,
+        fileType: 'image/jpeg'
+      };
+
+      let responseObj: Record<string, Object> = await this.post('/images/upload', JsonSafe.stringify(uploadBody));
+      let response: ApiResponse<UploadImageResponse> = this.toApiResponse<UploadImageResponse>(responseObj);
+      if (!response.success) {
+        throw new Error('图片上传失败: ' + response.message);
+      }
+      return response.data.remoteUrls[0];
+    } catch (err) {
+      if (file !== undefined) {
+        try { fs.closeSync(file); } catch (_) {}
+      }
+      throw new Error('无法读取文件: ' + (err as Error).message + ', URI: ' + localUri);
     }
-    const base64: string = btoa(binaryStr);
-
-    let uploadBody: UploadImageBody = {
-      fileName: fileName,
-      fileData: base64,
-      fileType: 'image/jpeg'
-    };
-
-    let responseObj: Record<string, Object> = await this.post('/images/upload', JsonSafe.stringify(uploadBody));
-    let response: ApiResponse<UploadImageResponse> = this.toApiResponse<UploadImageResponse>(responseObj);
-    if (!response.success) {
-      throw new Error('图片上传失败: ' + response.message);
-    }
-    return response.data.remoteUrls[0];
   }
 
   private async pushLocalData(forceFull: boolean): Promise<SyncUploadResponse> {
@@ -649,7 +839,12 @@ export class DistributedService {
       await this.commentRepository.upsertRemoteComment(comment);
     }
 
+    // ★ 修复：始终更新 lastSyncTimestamp，即使没有新数据
     if (data.lastSyncTimestamp > lastSync) {
+      AppStorage.set<number>(DistributedService.LAST_SYNC_KEY, data.lastSyncTimestamp);
+      console.info('[DistributedService] 更新同步时间戳: ' + data.lastSyncTimestamp);
+    } else if (lastSync === 0 && data.lastSyncTimestamp > 0) {
+      // ★ 如果没有新数据但服务器返回了时间戳，也保存
       AppStorage.set<number>(DistributedService.LAST_SYNC_KEY, data.lastSyncTimestamp);
     }
 
@@ -674,26 +869,16 @@ export class DistributedService {
     return token ?? '';
   }
 
-  private applyLoginResponse(data: LoginResponse, successMessage: string): void {
-    AppStorage.set<string>(DistributedService.AUTH_TOKEN_KEY, data.token);
-    AppStorage.set<string>(DistributedService.USER_ID_KEY, data.userId);
+  //private applyLoginResponse(data: LoginResponse, successMessage: string): void {
+  //  AppStorage.set<string>(DistributedService.AUTH_TOKEN_KEY, data.token);
+  //  AppStorage.set<string>(DistributedService.USER_ID_KEY, data.userId);
+  //  this.localDeviceId = data.userId;
+  //  this.currentState.lastMessage = successMessage;
+  //  this.currentState.state = SyncConnectionState.CONNECTED;
+  //  this.emitState();
+  //}
 
-    this.localDeviceId = data.userId;
-    this.currentState.lastMessage = successMessage;
-    this.currentState.state = SyncConnectionState.CONNECTED;
-    this.emitState();
-
-    let self: DistributedService = this;
-    self.syncNow(true).catch((err: Error) => {
-      console.warn('[DistributedService] 首次同步失败:', err.message);
-    });
-    self.pollTask.start(DistributedService.POLL_INTERVAL, (): void => {
-      self.onPollTick();
-    });
-  }
-
-  // ⭐ POST 请求核心方法
-  // ⭐ POST 请求核心方法（含详细错误日志）
+  // POST 请求核心方法
   private async post(endpoint: string, body: string): Promise<Record<string, Object>> {
     if (this.httpClient === null) {
       this.httpClient = http.createHttp();
@@ -725,17 +910,13 @@ export class DistributedService {
       return JSON.parse(response.result as string) as Record<string, Object>;
     } catch (err) {
       const error: BusinessError = err as BusinessError;
-
-      // ⭐ 打印最详细的错误信息
       console.error('========================================');
       console.error('[DistributedService] ❌ 网络请求失败');
       console.error('[DistributedService]    错误码: ' + error.code);
       console.error('[DistributedService]    错误信息: ' + error.message);
       console.error('[DistributedService]    请求URL: ' + url);
-      console.error('[DistributedService]    错误名称: ' + error.name);
       console.error('========================================');
 
-      // ⭐ 根据错误码给出中文提示
       const errorCode: number = error.code;
       if (errorCode === 28) {
         throw new Error('连接超时（错误码: 28），请检查服务器是否运行或防火墙是否开放端口');
@@ -750,6 +931,66 @@ export class DistributedService {
       } else {
         throw new Error('网络错误（错误码: ' + errorCode + '）: ' + error.message);
       }
+    }
+  }
+
+  // ★ 新增：GET 请求
+  private async get(endpoint: string): Promise<Record<string, Object>> {
+    if (this.httpClient === null) {
+      this.httpClient = http.createHttp();
+    }
+
+    const url: string = DistributedService.API_BASE + endpoint;
+    const requestHeaders: Record<string, string> = {
+      'Authorization': 'Bearer ' + this.getToken()
+    };
+    const options: http.HttpRequestOptions = {
+      method: http.RequestMethod.GET,
+      header: requestHeaders,
+      connectTimeout: 15000,
+      readTimeout: 30000
+    };
+
+    try {
+      const response: http.HttpResponse = await this.httpClient.request(url, options);
+      if (response.responseCode < 200 || response.responseCode >= 300) {
+        throw new Error('服务器返回状态码: ' + response.responseCode);
+      }
+      return JSON.parse(response.result as string) as Record<string, Object>;
+    } catch (err) {
+      const error: BusinessError = err as BusinessError;
+      throw new Error('GET请求失败: ' + error.message);
+    }
+  }
+
+  // ★ 新增：PUT 请求
+  private async put(endpoint: string, body: string): Promise<Record<string, Object>> {
+    if (this.httpClient === null) {
+      this.httpClient = http.createHttp();
+    }
+
+    const url: string = DistributedService.API_BASE + endpoint;
+    const requestHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + this.getToken()
+    };
+    const options: http.HttpRequestOptions = {
+      method: http.RequestMethod.PUT,
+      header: requestHeaders,
+      extraData: body,
+      connectTimeout: 15000,
+      readTimeout: 30000
+    };
+
+    try {
+      const response: http.HttpResponse = await this.httpClient.request(url, options);
+      if (response.responseCode < 200 || response.responseCode >= 300) {
+        throw new Error('服务器返回状态码: ' + response.responseCode);
+      }
+      return JSON.parse(response.result as string) as Record<string, Object>;
+    } catch (err) {
+      const error: BusinessError = err as BusinessError;
+      throw new Error('PUT请求失败: ' + error.message);
     }
   }
 
@@ -797,7 +1038,7 @@ export class DistributedService {
   }
 }
 
-// ⭐ btoa() 实现
+// btoa() 实现
 function btoa(binaryStr: string): string {
   const chars: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
   let output: string = '';
