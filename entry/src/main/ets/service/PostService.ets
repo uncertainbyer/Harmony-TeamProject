@@ -109,7 +109,7 @@ export class PostService {
   }
 
   async deletePost(postId: string): Promise<boolean> {
-    const rowCount: number = await this.postRepository.deletePost(postId);
+      const rowCount: number = await this.postRepository.deletePost(postId, false);
     if (rowCount > 0) this.syncEventBus.requestSync();
     return rowCount > 0;
   }

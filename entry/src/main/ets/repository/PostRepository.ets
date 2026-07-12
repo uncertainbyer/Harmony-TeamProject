@@ -301,23 +301,19 @@ export class PostRepository {
    * @param postId 帖子ID
    * @returns 删除的行数
    */
-  async deletePost(postId: string): Promise<number> {
-    const values: relationalStore.ValuesBucket = {};
-    values['is_deleted'] = 1;
-    values['update_time'] = Date.now();
-    values['sync_status'] = 0;
-
+  async deletePost(postId: string, serverDeleted: boolean): Promise<number> {
     const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
       PostModel.getTableName()
     );
     predicates.equalTo('post_id', postId);
-
-    const rowCount: number = await this.rdbManager.update(
-      PostModel.getTableName(),
-      values,
-      predicates
-    );
-    return rowCount;
+    if (serverDeleted) {
+      return await this.rdbManager.deleteData(PostModel.getTableName(), predicates);
+    }
+    const values: relationalStore.ValuesBucket = {};
+    values['is_deleted'] = 1;
+    values['update_time'] = Date.now();
+    values['sync_status'] = 0;
+    return await this.rdbManager.update(PostModel.getTableName(), values, predicates);
   }
 
   /**
@@ -332,7 +328,6 @@ export class PostRepository {
       PostModel.getTableName()
     );
     predicates.equalTo('sync_status', 0);
-    predicates.equalTo('is_deleted', 0);
 
     const resultSet: relationalStore.ResultSet = await this.rdbManager.query(predicates);
     const posts: PostModel[] = this.parseResultSetToPosts(resultSet);

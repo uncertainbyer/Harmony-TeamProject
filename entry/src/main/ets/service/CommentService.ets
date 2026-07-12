@@ -288,7 +288,7 @@ export class CommentService {
    */
   async deleteComment(commentId: string, postId: string): Promise<boolean> {
     try {
-      const rowCount: number = await this.commentRepository.deleteComment(commentId);
+      const rowCount: number = await this.commentRepository.deleteComment(commentId, false);
       if (rowCount > 0) {
         await this.postService.updatePostCommentCount(postId);
         this.syncEventBus.requestSync();

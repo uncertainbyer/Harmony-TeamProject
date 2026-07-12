@@ -303,20 +303,29 @@ export class CommentRepository {
    * @param commentId 评论ID
    * @returns 删除的行数
    */
-  async deleteComment(commentId: string): Promise<number> {
-    const values: relationalStore.ValuesBucket = {};
-    values['is_deleted'] = 1;
-
+  async deleteComment(commentId: string, serverDeleted: boolean): Promise<number> {
     const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
       CommentModel.getTableName()
     );
     predicates.equalTo('comment_id', commentId);
+    if (serverDeleted) {
+      return await this.rdbManager.deleteData(CommentModel.getTableName(), predicates);
+    }
+    const values: relationalStore.ValuesBucket = {};
+    values['is_deleted'] = 1;
+    values['sync_status'] = 0;
+    return await this.rdbManager.update(CommentModel.getTableName(), values, predicates);
+  }
 
-    return await this.rdbManager.update(
-      CommentModel.getTableName(),
-      values,
-      predicates
+  async markCommentDeleted(commentId: string): Promise<number> {
+    const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
+      CommentModel.getTableName()
     );
+    predicates.equalTo('comment_id', commentId);
+    const values: relationalStore.ValuesBucket = {};
+    values['is_deleted'] = 1;
+    values['sync_status'] = 0;
+    return await this.rdbManager.update(CommentModel.getTableName(), values, predicates);
   }
 
   /**
@@ -329,7 +338,6 @@ export class CommentRepository {
         CommentModel.getTableName()
       );
       predicates.equalTo('sync_status', 0);
-      predicates.equalTo('is_deleted', 0);
 
       const resultSet: relationalStore.ResultSet = await this.rdbManager.query(predicates);
       const comments: CommentModel[] = this.parseResultSetToComments(resultSet);

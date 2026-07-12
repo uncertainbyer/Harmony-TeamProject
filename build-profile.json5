@@ -12,6 +12,7 @@
             "useNormalizedOHMUrl": true
           }
         },
+
         "signingConfig": "default"
       }
     ],

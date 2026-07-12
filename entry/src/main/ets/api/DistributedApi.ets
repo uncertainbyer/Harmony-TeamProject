@@ -2,6 +2,7 @@
 import { http } from '@kit.NetworkKit';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
+import { image } from '@kit.ImageKit';
 import { PostModel } from '../model/PostModel';
 import { PostRepository } from '../repository/PostRepository';
 import { CommentRepository } from '../repository/CommentRepository';
@@ -41,7 +42,6 @@ interface ServerResponse {
   urls?: string[];
   acceptedPostIds?: string[];
   acceptedCommentIds?: string[];
-  likedPostIds?: string[];
   syncCount?: number;
   errorMsg?: string;
 }
@@ -364,13 +364,13 @@ class DistributedApi {
   async like(postId: string): Promise<ServerResponse | null> {
     const body: Record<string, Object> = {};
     body['postId'] = postId;
-    return await this.request('POST', '/api/like', body);
+    return await this.request('POST', '/api/auth/like', body);
   }
 
   async unlike(postId: string): Promise<ServerResponse | null> {
     const body: Record<string, Object> = {};
     body['postId'] = postId;
-    return await this.request('POST', '/api/unlike', body);
+    return await this.request('POST', '/api/auth/unlike', body);
   }
 
   async deletePost(postId: string): Promise<ServerResponse | null> {
@@ -391,15 +391,42 @@ class DistributedApi {
   }
 
   async uploadImages(imagePaths: string[]): Promise<string[]> {
-    try {
-      const body: Record<string, Object> = {};
-      body['imagePaths'] = JSON.stringify(imagePaths);
-      const result: ServerResponse | null = await this.request('POST', '/api/images/upload', body);
-      if (result && result.urls) {
-        return result.urls;
+    console.info('[DistributedApi] uploadImages 开始, paths=' + JSON.stringify(imagePaths));
+    const remoteUrls: string[] = [];
+    for (let i = 0; i < imagePaths.length; i++) {
+      try {
+        console.info('[DistributedApi] 尝试通过 ImageSource 读取: ' + imagePaths[i]);
+        const source: image.ImageSource = image.createImageSource(imagePaths[i]);
+        const pixelMap: image.PixelMap = await source.createPixelMap();
+        const packer: image.ImagePacker = image.createImagePacker();
+        const packedData: ArrayBuffer = await packer.packToData(pixelMap, { format: 'image/jpeg', quality: 80 });
+        source.release();
+        const uint8Array: Uint8Array = new Uint8Array(packedData);
+        let binaryStr: string = '';
+        for (let j = 0; j < uint8Array.byteLength; j++) {
+          binaryStr += String.fromCharCode(uint8Array[j]);
+        }
+        const base64: string = btoa(binaryStr);
+        const body: Record<string, Object> = {};
+        body['fileName'] = 'photo_' + i + '.jpg';
+        body['fileData'] = base64;
+        body['fileType'] = 'image/jpeg';
+        console.info('[DistributedApi] uploadImages 请求中...');
+        const result: ServerResponse | null = await this.request('POST', '/api/images/upload', body);
+        if (result && result.urls && result.urls.length > 0) {
+          const fullUrl: string = this.baseUrl + result.urls[0];
+          console.info('[DistributedApi] uploadImages 成功, url=' + fullUrl);
+          remoteUrls.push(fullUrl);
+        } else {
+          console.warn('[DistributedApi] uploadImages 服务器返回为空', result ? JSON.stringify(result) : 'null');
+          remoteUrls.push(imagePaths[i]);
+        }
+      } catch (err) {
+        console.warn('[DistributedApi] uploadImages 失败:', (err as Error).message);
+        remoteUrls.push(imagePaths[i]);
       }
-    } catch (_) {}
-    return imagePaths;
+    }
+    return remoteUrls;
   }
 
   // ============ 同步 ============
@@ -441,6 +468,10 @@ class DistributedApi {
         postItem['deviceId'] = p.deviceId;
         postItem['isDeleted'] = p.isDeleted;
         (uploadData['posts'] as Record<string, Object>[]).push(postItem);
+      }
+      console.info('[DistributedApi] 构建上传: posts=' + unsyncedPosts.length + ', comments=' + unsyncedComments.length);
+      if (unsyncedComments.length > 0) {
+        console.info('[DistributedApi] 首条评论 isDeleted=' + unsyncedComments[0].isDeleted + ', id=' + unsyncedComments[0].commentId);
       }
       for (let ci = 0; ci < unsyncedComments.length; ci++) {
         const c: CommentModel = unsyncedComments[ci];
@@ -556,15 +587,20 @@ class DistributedApi {
             comment.content = (sc['content'] as string) || '';
             comment.createTime = (sc['createTime'] as number) || Date.now();
             comment.deviceId = (sc['deviceId'] as string) || '';
+            comment.isDeleted = (sc['isDeleted'] as boolean) || false;
             comment.syncStatus = 1;
             const upserted: boolean = await commentRepo.upsertRemoteComment(comment);
             if (upserted) totalSynced++;
           }
         }
 
-        console.info('[DistributedApi] 下载完成: posts=' + serverPosts.length + ', comments=' + serverComments.length + ', liked=' + (downloadResult.likedPostIds || []).length);
+        const likedData: string[] | undefined = data['likedPostIds'] as string[] | undefined;
+        console.info('[DistributedApi] 下载原始数据: posts=' + serverPosts.length + ', comments=' + serverComments.length + ', liked=' + (likedData ? likedData.length : 0));
+        if (serverPosts.length > 0) {
+          console.info('[DistributedApi] 首条帖子 postId=' + (serverPosts[0]['postId'] as string) + ' userId=' + (serverPosts[0]['userId'] as string));
+        }
 
-        const likedPostIds: string[] = downloadResult.likedPostIds || [];
+        const likedPostIds: string[] = likedData || [];
         if (likedPostIds.length > 0) {
           LikedCache.setCurrentUser(AppStorage.get<string>('login_username') || '');
           LikedCache.extractFromFeed(
@@ -658,6 +694,29 @@ class DistributedApi {
       return null;
     }
   }
+}
+
+function btoa(binaryStr: string): string {
+  const chars: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+  let output: string = '';
+  const bytes: number[] = [];
+  for (let i = 0; i < binaryStr.length; i++) {
+    bytes.push(binaryStr.charCodeAt(i));
+  }
+  let i: number = 0;
+  while (i < bytes.length) {
+    const b1: number = bytes[i++];
+    const b2: number = i < bytes.length ? bytes[i++] : 0;
+    const b3: number = i < bytes.length ? bytes[i++] : 0;
+    const enc1: number = b1 >> 2;
+    const enc2: number = ((b1 & 3) << 4) | (b2 >> 4);
+    const enc3: number = ((b2 & 15) << 2) | (b3 >> 6);
+    const enc4: number = b3 & 63;
+    output += chars.charAt(enc1) + chars.charAt(enc2)
+      + (i >= bytes.length + 1 ? '=' : chars.charAt(enc3))
+      + (i >= bytes.length ? '=' : chars.charAt(enc4));
+  }
+  return output;
 }
 
 export const distributedApi = new DistributedApi();

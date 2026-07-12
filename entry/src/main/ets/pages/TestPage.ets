@@ -6,6 +6,7 @@ import { distributedApi } from '../api/DistributedApi';
 import { Constants } from '../common/Constants';
 import { promptAction } from '@kit.ArkUI';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import { image } from '@kit.ImageKit';
 import { common } from '@kit.AbilityKit';
 import { LikedCache, PostLikedInfo } from '../common/LikedCache';
 import { SessionManager } from '../common/SessionManager';
@@ -117,6 +118,7 @@ struct SocialMediaMain {
   }
 
   handleImageClick(imageUrl: string): void {
+    console.info('[SocialMediaMain] 点击图片URL: ' + imageUrl);
     this.previewImageUrl = imageUrl;
     this.showGlobalImagePreview = true;
   }
@@ -481,38 +483,36 @@ struct SocialMediaMain {
 
   async handleDelete(postId: string): Promise<void> {
     try {
-      const result = await postApi.delete(postId);
-      if (result.success) {
-        try {
-          await distributedApi.deletePost(postId);
-        } catch (err) {
-          console.warn('[SocialMediaMain] 服务端删除失败:', (err as Error).message);
+      let serverDeleted: boolean = false;
+      try {
+        const delResult = await distributedApi.deletePost(postId);
+        if (delResult !== null && delResult.success === true) {
+          serverDeleted = true;
         }
-
-        const newFeedData: FeedItemType[] = [];
-        for (let i = 0; i < this.feedData.length; i++) {
-          if (this.feedData[i].postId !== postId) {
-            newFeedData.push(this.feedData[i]);
-          }
-        }
-        this.feedData = newFeedData;
-
-        const newMyWorks: FeedItemType[] = [];
-        for (let i = 0; i < this.myWorks.length; i++) {
-          if (this.myWorks[i].postId !== postId) {
-            newMyWorks.push(this.myWorks[i]);
-          }
-        }
-        this.myWorks = newMyWorks;
-
-        if (distributedApi.isReady()) {
-          await distributedApi.sync(false);
-        }
-
-        promptAction.showToast({ message: '已删除', duration: 1500 });
-      } else {
-        promptAction.showToast({ message: '删除失败: ' + result.message, duration: 2000 });
+      } catch (err) {
+        console.warn('[SocialMediaMain] 服务端删除失败:', (err as Error).message);
       }
+
+      const postRepo: PostRepository = new PostRepository();
+      await postRepo.deletePost(postId, serverDeleted);
+
+      const newFeedData: FeedItemType[] = [];
+      for (let i = 0; i < this.feedData.length; i++) {
+        if (this.feedData[i].postId !== postId) {
+          newFeedData.push(this.feedData[i]);
+        }
+      }
+      this.feedData = newFeedData;
+
+      const newMyWorks: FeedItemType[] = [];
+      for (let i = 0; i < this.myWorks.length; i++) {
+        if (this.myWorks[i].postId !== postId) {
+          newMyWorks.push(this.myWorks[i]);
+        }
+      }
+      this.myWorks = newMyWorks;
+
+      promptAction.showToast({ message: '已删除', duration: 1500 });
     } catch (err) {
       promptAction.showToast({ message: '删除异常: ' + (err as Error).message, duration: 2000 });
     }
@@ -524,13 +524,22 @@ struct SocialMediaMain {
     try {
       const loginUsername: string = AppStorage.get<string>('login_username') || 'local_user';
       const deviceId: string = AppStorage.get<string>('device_id') || 'local_device';
-      const imagePaths: string[] = imageUrl.length > 0 ? [imageUrl] : [];
+
+      // 先上传图片到服务端获取远程 URL
+      let remotePaths: string[] = [];
+      if (imageUrl.length > 0) {
+        if (distributedApi.isReady()) {
+          remotePaths = await distributedApi.uploadImages([imageUrl]);
+        } else {
+          remotePaths = [imageUrl];
+        }
+      }
 
       const publishName = this.displayNickname.length > 0 ? this.displayNickname : '用户';
       const publishAvatar = this.displayAvatar;
 
       const result = await postApi.publishWithAI(
-        loginUsername, publishName, publishAvatar, description, imagePaths, deviceId
+        loginUsername, publishName, publishAvatar, description, remotePaths, deviceId
       );
 
       if (result.success && result.data !== null) {
@@ -677,8 +686,8 @@ struct SocialMediaMain {
                 onLikeChange: (postId: string, isLiked: boolean, newCount: number): void => {
                   this.handleLikeChange(postId, isLiked, newCount);
                 },
-                onCommentAdd: (postId: string, comment: CommentItemType): void => {
-                  this.handleCommentAdd(postId, comment);
+                onCommentAdd: async (postId: string, comment: CommentItemType): Promise<void> => {
+                  await this.handleCommentAdd(postId, comment);
                 },
                 onDelete: (postId: string): void => {
                   this.handleDelete(postId);
@@ -790,23 +799,32 @@ struct SocialMediaMain {
     .width('100%').height('100%')
   }
 
-  handleCommentAdd(postId: string, comment: CommentItemType) {
+  async handleCommentAdd(postId: string, comment: CommentItemType): Promise<void> {
+    const dbComments: CommentItemType[] = [];
+    try {
+      const result = await commentApi.getAllByPost(postId);
+      if (result.success && result.data !== null) {
+        for (let j = 0; j < result.data.length; j++) {
+          const c = result.data[j];
+          dbComments.push({ username: c.userName, content: c.content, userId: c.userId, commentId: c.commentId });
+        }
+      }
+    } catch (_) {}
+    if (dbComments.length === 0) {
+      dbComments.push(comment);
+    }
+
     const doUpdate = (items: FeedItemType[]): FeedItemType[] => {
       const result: FeedItemType[] = [];
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         if (item.postId === postId) {
-          const newList: CommentItemType[] = [];
-          for (let j = 0; j < item.commentsList.length; j++) {
-            newList.push(item.commentsList[j]);
-          }
-          newList.push(comment);
           result.push({
             id: item.id, postId: item.postId, type: item.type, url: item.url,
             username: item.username, userId: item.userId, avatar: item.avatar,
             description: item.description, createTime: item.createTime,
-            likes: item.likes, comments: newList.length, isLiked: item.isLiked,
-            commentsList: newList, categoryId: item.categoryId, categoryName: item.categoryName
+            likes: item.likes, comments: dbComments.length, isLiked: item.isLiked,
+            commentsList: dbComments, categoryId: item.categoryId, categoryName: item.categoryName
           });
         } else {
           result.push({
@@ -1012,14 +1030,22 @@ struct FeedItem {
 
   private async handleFeedDeleteComment(comment: CommentItemType, index: number): Promise<void> {
     if (comment.commentId.length > 0) {
+      let serverDeleted: boolean = false;
       try {
-        await distributedApi.deleteComment(comment.commentId);
+        const delResult = await distributedApi.deleteComment(comment.commentId);
+        if (delResult !== null && delResult.success === true) {
+          serverDeleted = true;
+          console.info('[FeedItem] 服务端删除成功');
+        } else {
+          console.warn('[FeedItem] 服务端返回失败:', delResult ? delResult.message : 'null');
+        }
       } catch (err) {
-        console.warn('[FeedItem] 服务端删除失败，继续本地删除:', (err as Error).message);
+        console.warn('[FeedItem] 服务端删除异常:', (err as Error).message);
       }
+      console.info('[FeedItem] 本地删除, serverDeleted=' + serverDeleted + ', commentId=' + comment.commentId);
       try {
         const commentRepo: CommentRepository = new CommentRepository();
-        await commentRepo.deleteComment(comment.commentId);
+        await commentRepo.deleteComment(comment.commentId, serverDeleted);
       } catch (err) {
         console.warn('[FeedItem] 本地删除失败:', (err as Error).message);
       }
@@ -1074,7 +1100,10 @@ struct FeedItem {
   }
 
   private getImageSrc(): string | Resource {
-    if (this.feed.url.length > 0) return this.feed.url;
+    if (this.feed.url.length > 0) {
+      console.info('[FeedItem] 图片URL: ' + this.feed.url);
+      return this.feed.url;
+    }
     return $r('app.media.nai');
   }
 
@@ -2117,14 +2146,16 @@ struct ProfileView {
   private async handleDetailDeleteComment(comment: CommentItemType, index: number): Promise<void> {
     const dbCommentId: string = this.detailPost!.commentsList[index]?.commentId || '';
     if (dbCommentId.length > 0) {
+      let serverDeleted: boolean = false;
       try {
         await distributedApi.deleteComment(dbCommentId);
+        serverDeleted = true;
       } catch (err) {
-        console.warn('[ProfileView] 服务端删除失败，继续本地删除:', (err as Error).message);
+        console.warn('[ProfileView] 服务端删除失败，改用软删+同步:', (err as Error).message);
       }
       try {
         const commentRepo: CommentRepository = new CommentRepository();
-        await commentRepo.deleteComment(dbCommentId);
+        await commentRepo.deleteComment(dbCommentId, serverDeleted);
       } catch (err) {
         console.warn('[ProfileView] 本地删除失败:', (err as Error).message);
       }
