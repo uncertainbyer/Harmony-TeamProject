@@ -81,6 +81,16 @@
           "abilities": ["EntryAbility"],
           "when": "inuse"
         }
+      },
+
+      // ✅ 新增 — 使用相机拍照进行AI识图
+      {
+        "name": "ohos.permission.CAMERA",
+        "reason": "$string:camera_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
       }
 
     ],
