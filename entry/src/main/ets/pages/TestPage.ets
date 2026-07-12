@@ -11,6 +11,8 @@ import { LikedCache, PostLikedInfo } from '../common/LikedCache';
 import { SessionManager } from '../common/SessionManager';
 import { camera, cameraPicker } from '@kit.CameraKit';
 import { PostModel } from '../model/PostModel';
+import { PostRepository } from '../repository/PostRepository';
+import { CommentRepository } from '../repository/CommentRepository';
 
 interface TabItemType {
   title: string;
@@ -21,6 +23,8 @@ interface TabItemType {
 interface CommentItemType {
   username: string;
   content: string;
+  userId: string;
+  commentId: string;
 }
 
 interface RecognizeRecord {
@@ -134,7 +138,7 @@ struct SocialMediaMain {
     if (loginUsername.length === 0) return;
 
     LikedCache.setCurrentUser(loginUsername);
-    this.likedIds = await LikedCache.getLikedIds();
+    this.likedIds = await LikedCache.loadFromStorage();
 
     const updatedFeed: FeedItemType[] = [];
     for (let i = 0; i < this.feedData.length; i++) {
@@ -218,11 +222,13 @@ struct SocialMediaMain {
           console.info('[SocialMediaMain] 已加载点赞: ' + this.likedIds.length + ' 条');
         }
 
-        // ★ 从服务器获取个人资料，如果失败则保留本地已有值
+        // ★ 从服务器获取个人资料，如果 token 无效则用保存的凭据重新登录
+        let profileLoaded: boolean = false;
         try {
           const profile = await distributedApi.getProfile();
           if (profile.displayNickname.length > 0) {
             AppStorage.set<string>('display_nickname', profile.displayNickname);
+            profileLoaded = true;
           }
           if (profile.avatar.length > 0) {
             AppStorage.set<string>('display_avatar', profile.avatar);
@@ -231,10 +237,29 @@ struct SocialMediaMain {
             AppStorage.set<string>('display_bio', profile.bio);
           }
         } catch (err) {
-          console.warn('[SocialMediaMain] 加载个人资料失败，保留本地值:', (err as Error).message);
+          console.warn('[SocialMediaMain] 加载个人资料失败:', (err as Error).message);
         }
 
-        if (distributedApi.isReady() && !distributedApi.localDeviceId.startsWith('local_')) {
+        if (!profileLoaded && loginUsername.length > 0) {
+          try {
+            const savedPwd: string = await SessionManager.getSavedPassword();
+            if (savedPwd.length > 0) {
+              await distributedApi.login(loginUsername, savedPwd);
+              const profile2 = await distributedApi.getProfile();
+              if (profile2.displayNickname.length > 0) {
+                AppStorage.set<string>('display_nickname', profile2.displayNickname);
+              }
+              if (profile2.avatar.length > 0) {
+                AppStorage.set<string>('display_avatar', profile2.avatar);
+              }
+              if (profile2.bio.length > 0) {
+                AppStorage.set<string>('display_bio', profile2.bio);
+              }
+            }
+          } catch (_) {}
+        }
+
+        if (distributedApi.isReady()) {
           await distributedApi.sync(true);
           this.startPolling();
         }
@@ -318,7 +343,9 @@ struct SocialMediaMain {
                 const c = commentResult.data[j];
                 commentItems.push({
                   username: c.userName || '用户',
-                  content: c.content
+                  content: c.content,
+                  userId: c.userId,
+                  commentId: c.commentId
                 });
               }
               item.commentsList = commentItems.length > 0 ? commentItems : [];
@@ -456,6 +483,12 @@ struct SocialMediaMain {
     try {
       const result = await postApi.delete(postId);
       if (result.success) {
+        try {
+          await distributedApi.deletePost(postId);
+        } catch (err) {
+          console.warn('[SocialMediaMain] 服务端删除失败:', (err as Error).message);
+        }
+
         const newFeedData: FeedItemType[] = [];
         for (let i = 0; i < this.feedData.length; i++) {
           if (this.feedData[i].postId !== postId) {
@@ -471,6 +504,10 @@ struct SocialMediaMain {
           }
         }
         this.myWorks = newMyWorks;
+
+        if (distributedApi.isReady()) {
+          await distributedApi.sync(false);
+        }
 
         promptAction.showToast({ message: '已删除', duration: 1500 });
       } else {
@@ -648,7 +685,13 @@ struct SocialMediaMain {
                 },
                 displayNickname: this.displayNickname,
                 isLoggedIn: this.isLoggedIn,
-                onGoToProfile: (): void => { this.currentTabIndex = 4; }
+                onGoToProfile: (): void => { this.currentTabIndex = 4; },
+                onRefresh: async (): Promise<void> => {
+                  await this.loadFeed(true);
+                  if (distributedApi.isReady()) {
+                    await distributedApi.sync(false);
+                  }
+                }
               })
             }
           }
@@ -686,7 +729,10 @@ struct SocialMediaMain {
                 this.displayAvatar = newAvatar;
               },
               onLogout: (): void => { this.clearPersonalData(); },
-              onLogin: (): void => { this.refreshLikedDataAfterLogin(); }
+              onLogin: async (): Promise<void> => {
+                await this.refreshLikedDataAfterLogin();
+                await this.loadFeed(true);
+              }
             })
           }
         }
@@ -705,8 +751,16 @@ struct SocialMediaMain {
             .width('20%').height(this.tabBarHeight)
             .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
             .onClick(() => {
-              this.currentTabIndex = index;
-              this.currentTitle = item.title;
+              if (this.currentTabIndex !== index) {
+                this.currentTabIndex = index;
+                this.currentTitle = item.title;
+                if (distributedApi.isReady()) {
+                  distributedApi.sync(false);
+                }
+                if (index === 0) {
+                  this.loadFeed(true);
+                }
+              }
             })
           })
         }
@@ -736,7 +790,37 @@ struct SocialMediaMain {
   }
 
   handleCommentAdd(postId: string, comment: CommentItemType) {
-    throw new Error('Method not implemented.');
+    const doUpdate = (items: FeedItemType[]): FeedItemType[] => {
+      const result: FeedItemType[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.postId === postId) {
+          const newList: CommentItemType[] = [];
+          for (let j = 0; j < item.commentsList.length; j++) {
+            newList.push(item.commentsList[j]);
+          }
+          newList.push(comment);
+          result.push({
+            id: item.id, postId: item.postId, type: item.type, url: item.url,
+            username: item.username, userId: item.userId, avatar: item.avatar,
+            description: item.description, createTime: item.createTime,
+            likes: item.likes, comments: newList.length, isLiked: item.isLiked,
+            commentsList: newList, categoryId: item.categoryId, categoryName: item.categoryName
+          });
+        } else {
+          result.push({
+            id: item.id, postId: item.postId, type: item.type, url: item.url,
+            username: item.username, userId: item.userId, avatar: item.avatar,
+            description: item.description, createTime: item.createTime,
+            likes: item.likes, comments: item.comments, isLiked: item.isLiked,
+            commentsList: item.commentsList, categoryId: item.categoryId, categoryName: item.categoryName
+          });
+        }
+      }
+      return result;
+    };
+    this.feedData = doUpdate(this.feedData);
+    this.myWorks = doUpdate(this.myWorks);
   }
 }
 
@@ -754,6 +838,8 @@ struct FeedList {
   @Prop displayNickname: string = '';
   @Prop isLoggedIn: boolean = false;
   onGoToProfile?: () => void;
+  onRefresh?: () => void;
+  @State isRefreshing: boolean = false;
 
   build() {
     if (!this.isLoggedIn) {
@@ -776,34 +862,42 @@ struct FeedList {
       .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
       .backgroundColor('#F5F5F5')
     } else {
-      List() {
-        ForEach(this.feedData, (item: FeedItemType) => {
-          ListItem() {
-            FeedItem({
-              feed: item,
-              onImageClick: this.onImageClick,
-              onLikeChange: this.onLikeChange,
-              onCommentAdd: this.onCommentAdd,
-              onDelete: this.onDelete,
-              displayNickname: this.displayNickname
-            })
-          }
-          .margin({ bottom: 10 })
-        })
-        if (this.hasMore) {
-          ListItem() {
-            Row() {
-              LoadingProgress().width(24).height(24).margin({ right: 8 })
-              Text('加载更多...').fontSize(14).fontColor('#999999')
+      Refresh({ refreshing: $$this.isRefreshing }) {
+        List() {
+          ForEach(this.feedData, (item: FeedItemType) => {
+            ListItem() {
+              FeedItem({
+                feed: item,
+                onImageClick: this.onImageClick,
+                onLikeChange: this.onLikeChange,
+                onCommentAdd: this.onCommentAdd,
+                onDelete: this.onDelete,
+                displayNickname: this.displayNickname
+              })
             }
-            .width('100%').height(50).justifyContent(FlexAlign.Center)
-            .onAppear(() => { if (this.onLoadMore) this.onLoadMore(); })
+            .margin({ bottom: 10 })
+          })
+          if (this.hasMore) {
+            ListItem() {
+              Row() {
+                LoadingProgress().width(24).height(24).margin({ right: 8 })
+                Text('加载更多...').fontSize(14).fontColor('#999999')
+              }
+              .width('100%').height(50).justifyContent(FlexAlign.Center)
+              .onAppear(() => { if (this.onLoadMore) this.onLoadMore(); })
+            }
           }
         }
+        .width('100%').height('100%')
+        .padding({ left: 12, right: 12, top: 10 })
+        .backgroundColor('#F5F5F5')
       }
-      .width('100%').height('100%')
-      .padding({ left: 12, right: 12, top: 10 })
-      .backgroundColor('#F5F5F5')
+      .onRefreshing(async (): Promise<void> => {
+        if (this.onRefresh) {
+          await this.onRefresh();
+        }
+        this.isRefreshing = false;
+      })
     }
   }
 }
@@ -903,11 +997,37 @@ struct FeedItem {
         this.onLikeChange(this.feed.postId, newIsLiked, result.data);
         if (distributedApi.isReady()) {
           distributedApi.sync(false);
+          if (newIsLiked) {
+            distributedApi.like(this.feed.postId);
+          } else {
+            distributedApi.unlike(this.feed.postId);
+          }
         }
       }
     } catch (err) {
       console.warn('[FeedItem] 点赞失败:', (err as Error).message);
     }
+  }
+
+  private async handleFeedDeleteComment(comment: CommentItemType, index: number): Promise<void> {
+    if (comment.commentId.length > 0) {
+      try {
+        await distributedApi.deleteComment(comment.commentId);
+      } catch (err) {
+        console.warn('[FeedItem] 服务端删除失败，继续本地删除:', (err as Error).message);
+      }
+      try {
+        const commentRepo: CommentRepository = new CommentRepository();
+        await commentRepo.deleteComment(comment.commentId);
+      } catch (err) {
+        console.warn('[FeedItem] 本地删除失败:', (err as Error).message);
+      }
+    }
+    const newList: CommentItemType[] = [];
+    for (let i = 0; i < this.commentsList.length; i++) {
+      if (i !== index) newList.push(this.commentsList[i]);
+    }
+    this.commentsList = newList;
   }
 
   async handleSendComment(): Promise<void> {
@@ -918,7 +1038,8 @@ struct FeedItem {
     try {
       if (this.feed.postId.length === 0) {
         const displayName = this.displayNickname.length > 0 ? this.displayNickname : '我';
-        const newComment: CommentItemType = { username: displayName, content: trimmed };
+        const currentUserId: string = AppStorage.get<string>('login_username') || 'local_user';
+        const newComment: CommentItemType = { username: displayName, content: trimmed, userId: currentUserId, commentId: '' };
         this.isSending = false;
         this.onCommentAdd(this.feed.postId, newComment);
         return;
@@ -935,13 +1056,14 @@ struct FeedItem {
         for (let i = 0; i < this.commentsList.length; i++) {
           newList.push(this.commentsList[i]);
         }
-        const newComment: CommentItemType = { username: displayName, content: trimmed };
+        const commentId: string = result.data !== null ? result.data.commentId : '';
+        const newComment: CommentItemType = { username: displayName, content: trimmed, userId: loginUsername, commentId: commentId };
         newList.push(newComment);
         this.commentsList = newList;
         this.commentText = '';
         this.onCommentAdd(this.feed.postId, newComment);
         if (distributedApi.isReady()) {
-          distributedApi.sync(false);
+          await distributedApi.sync(false);
         }
       }
     } catch (err) {
@@ -1055,7 +1177,7 @@ struct FeedItem {
                   Row() {
                     Text(comment.username)
                       .fontSize(13).fontColor('#FF9800').fontWeight(FontWeight.Medium)
-                    if (this.displayNickname.length > 0 && comment.username === this.displayNickname) {
+                    if (comment.userId.length > 0 && comment.userId === AppStorage.get<string>('login_username')) {
                       Text('我')
                         .fontSize(10).fontColor('#FFFFFF')
                         .backgroundColor('#FFD700')
@@ -1068,7 +1190,15 @@ struct FeedItem {
                   .margin({ right: 6 })
 
                   Text(comment.content)
-                    .fontSize(14).fontColor('#333333')
+                    .fontSize(14).fontColor('#333333').layoutWeight(1)
+                  if (comment.userId.length > 0 && comment.userId === AppStorage.get<string>('login_username')) {
+                    Text('删除')
+                      .fontSize(11).fontColor('#FF0000')
+                      .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+                      .onClick(() => {
+                        this.handleFeedDeleteComment(comment, index);
+                      })
+                  }
                 }
                 .width('100%').padding({ top: 4, bottom: 4 })
                 .alignItems(VerticalAlign.Center)
@@ -1737,10 +1867,24 @@ struct ProfileView {
           this.loginPassword.trim()
         );
 
-        // ★ 从 AppStorage 读取分布式 API 已经设置好的值
-        const nickname: string = AppStorage.get<string>('display_nickname') || '用户';
-        const avatarUrl: string = AppStorage.get<string>('display_avatar') || '';
-        const bioText: string = AppStorage.get<string>('display_bio') || '这个人很懒，什么都没有写...';
+        // ★ 从服务器获取个人资料确保数据最新
+        let nickname: string = AppStorage.get<string>('display_nickname') || '';
+        let avatarUrl: string = AppStorage.get<string>('display_avatar') || '';
+        let bioText: string = AppStorage.get<string>('display_bio') || '这个人很懒，什么都没有写...';
+        try {
+          const profile = await distributedApi.getProfile();
+          if (profile.displayNickname.length > 0) nickname = profile.displayNickname;
+          if (profile.avatar.length > 0) avatarUrl = profile.avatar;
+          if (profile.bio.length > 0) bioText = profile.bio;
+        } catch (_) {}
+
+        if (nickname.length > 0) {
+          AppStorage.set<string>('display_nickname', nickname);
+        }
+        if (avatarUrl.length > 0) {
+          AppStorage.set<string>('display_avatar', avatarUrl);
+        }
+        AppStorage.set<string>('display_bio', bioText);
 
         // ★ 更新本地 props
         this.onNicknameChange(nickname);
@@ -1754,7 +1898,9 @@ struct ProfileView {
         this.showLoginDialog = false;
         promptAction.showToast({ message: '登录成功', duration: 2000 });
 
-        distributedApi.sync(true).catch(() => {});
+        if (distributedApi.isReady()) {
+          await distributedApi.sync(true);
+        }
         this.onLoadMyWorks();
 
         if (this.onLogin) {
@@ -1795,9 +1941,20 @@ struct ProfileView {
       if (result.success && result.data) {
         await SessionManager.saveCredentials(username, password);
 
-        // ★ distributedApi.register() 已经设置了 display_nickname/avatar/bio
-        const newNickname: string = AppStorage.get<string>('display_nickname') || '用户';
-        const newAvatar: string = AppStorage.get<string>('display_avatar') || '';
+        // ★ 注册后从服务器拉取个人资料
+        let newNickname: string = AppStorage.get<string>('display_nickname') || '';
+        let newAvatar: string = AppStorage.get<string>('display_avatar') || '';
+        try {
+          const regProfile = await distributedApi.getProfile();
+          if (regProfile.displayNickname.length > 0) {
+            newNickname = regProfile.displayNickname;
+            AppStorage.set<string>('display_nickname', newNickname);
+          }
+          if (regProfile.avatar.length > 0) {
+            newAvatar = regProfile.avatar;
+            AppStorage.set<string>('display_avatar', newAvatar);
+          }
+        } catch (_) {}
 
         AppStorage.set<string>('login_username', username);
         LikedCache.setCurrentUser(username);
@@ -1809,7 +1966,9 @@ struct ProfileView {
         this.closeAuthDialog();
         promptAction.showToast({ message: '注册成功！昵称: ' + newNickname, duration: 3000 });
 
-        distributedApi.sync(true).catch(() => {});
+        if (distributedApi.isReady()) {
+          await distributedApi.sync(true);
+        }
         this.onLoadMyWorks();
 
         if (this.onLogin) {
@@ -1864,6 +2023,26 @@ struct ProfileView {
     promptAction.showToast({ message: '已退出登录', duration: 2000 });
   }
 
+  async handleDeleteAccount(): Promise<void> {
+    try {
+      const result = await distributedApi.deleteAccount();
+      if (result !== null && result.success === true) {
+        await SessionManager.clearCredentials();
+        AppStorage.set<string>('display_nickname', '');
+        AppStorage.set<string>('display_avatar', '');
+        AppStorage.set<string>('display_bio', '这个人很懒，什么都没有写...');
+        AppStorage.set<string>('login_username', '');
+        this.isLoggedIn = false;
+        if (this.onLogout) this.onLogout();
+        promptAction.showToast({ message: '账号已永久删除', duration: 3000 });
+      } else {
+        promptAction.showToast({ message: '注销失败: ' + (result ? result.message : '无响应'), duration: 2000 });
+      }
+    } catch (err) {
+      promptAction.showToast({ message: '注销异常: ' + (err as Error).message, duration: 2000 });
+    }
+  }
+
   private async saveNickname(): Promise<void> {
     const trimmed = this.editNickname.trim();
     if (trimmed.length === 0) {
@@ -1892,6 +2071,16 @@ struct ProfileView {
       this.onNicknameChange(result.displayNickname!);
       this.showEditProfile = false;
       promptAction.showToast({ message: '昵称已更新', duration: 1500 });
+      const loginUsername: string = AppStorage.get<string>('login_username') || '';
+      if (loginUsername.length > 0) {
+        const postRepo: PostRepository = new PostRepository();
+        postRepo.updateUserPostsUserName(loginUsername, result.displayNickname!).catch(() => {});
+        const commentRepo: CommentRepository = new CommentRepository();
+        commentRepo.updateUserCommentsUserName(loginUsername, result.displayNickname!).catch(() => {});
+      }
+      if (distributedApi.isReady()) {
+        distributedApi.sync(false);
+      }
     } catch (err) {
       promptAction.showToast({ message: '同步服务器失败: ' + (err as Error).message, duration: 2000 });
     }
@@ -1932,11 +2121,68 @@ struct ProfileView {
         AppStorage.setOrCreate('display_avatar', profileResult.avatar!);
         this.onAvatarChange(profileResult.avatar!);
         promptAction.showToast({ message: '头像已更新', duration: 1500 });
+        if (distributedApi.isReady()) {
+          distributedApi.sync(false);
+        }
       }
     } catch (err) {
       console.warn('[ProfileView] 选择头像失败:', (err as Error).message);
       promptAction.showToast({ message: '头像更新失败: ' + (err as Error).message, duration: 2000 });
     }
+  }
+
+  private async loadDetailComments(postId: string): Promise<void> {
+    try {
+      const result = await commentApi.getAllByPost(postId);
+      if (result.success && result.data !== null) {
+        const items: CommentItemType[] = [];
+        for (let i = 0; i < result.data.length; i++) {
+          items.push({ username: result.data[i].userName, content: result.data[i].content, userId: result.data[i].userId, commentId: result.data[i].commentId });
+        }
+        if (this.detailPost !== null) {
+          const old = this.detailPost;
+          const updated: FeedItemType = {
+            id: old.id, postId: old.postId, type: old.type, url: old.url,
+            username: old.username, userId: old.userId, avatar: old.avatar,
+            description: old.description, createTime: old.createTime,
+            likes: old.likes, comments: items.length, isLiked: old.isLiked,
+            commentsList: items, categoryId: old.categoryId, categoryName: old.categoryName
+          };
+          this.detailPost = updated;
+        }
+      }
+    } catch (_) {}
+  }
+
+  private async handleDetailDeleteComment(comment: CommentItemType, index: number): Promise<void> {
+    const dbCommentId: string = this.detailPost!.commentsList[index]?.commentId || '';
+    if (dbCommentId.length > 0) {
+      try {
+        await distributedApi.deleteComment(dbCommentId);
+      } catch (err) {
+        console.warn('[ProfileView] 服务端删除失败，继续本地删除:', (err as Error).message);
+      }
+      try {
+        const commentRepo: CommentRepository = new CommentRepository();
+        await commentRepo.deleteComment(dbCommentId);
+      } catch (err) {
+        console.warn('[ProfileView] 本地删除失败:', (err as Error).message);
+      }
+    }
+    const newList: CommentItemType[] = [];
+    for (let i = 0; i < this.detailPost!.commentsList.length; i++) {
+      if (i !== index) newList.push(this.detailPost!.commentsList[i]);
+    }
+    const updated: FeedItemType = {
+      id: this.detailPost!.id, postId: this.detailPost!.postId, type: this.detailPost!.type,
+      url: this.detailPost!.url, username: this.detailPost!.username, userId: this.detailPost!.userId,
+      avatar: this.detailPost!.avatar, description: this.detailPost!.description,
+      createTime: this.detailPost!.createTime, likes: this.detailPost!.likes,
+      comments: newList.length, isLiked: this.detailPost!.isLiked,
+      commentsList: newList, categoryId: this.detailPost!.categoryId,
+      categoryName: this.detailPost!.categoryName
+    };
+    this.detailPost = updated;
   }
 
   private async handlePostComment(): Promise<void> {
@@ -1961,9 +2207,13 @@ struct ProfileView {
         for (let i = 0; i < oldList.length; i++) {
           newList.push(oldList[i]);
         }
+        const commentUserId: string = AppStorage.get<string>('login_username') || 'local_user';
+        const newCommentId: string = commentResult.data !== null ? commentResult.data.commentId : '';
         const newComment: CommentItemType = {
           username: this.displayNickname.length > 0 ? this.displayNickname : '我',
-          content: trimmed
+          content: trimmed,
+          userId: commentUserId,
+          commentId: newCommentId
         };
         newList.push(newComment);
 
@@ -2069,8 +2319,17 @@ struct ProfileView {
                   Image(this.detailPost!.avatar.length > 0 ? this.detailPost!.avatar : $r('app.media.nai'))
                     .width(36).height(36).borderRadius(18).margin({ right: 8 })
                   Column() {
-                    Text(this.detailPost!.username)
-                      .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#333333')
+                    Row() {
+                      Text(this.displayNickname.length > 0 ? this.displayNickname : this.detailPost!.username)
+                        .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#333333')
+                      if (this.detailPost!.userId.length > 0 && this.detailPost!.userId === AppStorage.get<string>('login_username')) {
+                        Text('我')
+                          .fontSize(10).fontColor('#FFFFFF')
+                          .backgroundColor('#FFD700')
+                          .borderRadius(8).padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                          .margin({ left: 6 })
+                      }
+                    }
                     Text(this.getTimeDisplay(this.detailPost!.createTime))
                       .fontSize(12).fontColor('#999999')
                   }
@@ -2096,7 +2355,7 @@ struct ProfileView {
                   Row() {
                     Image($r('app.media.comment'))
                       .width(20).height(20).fillColor('#666666')
-                    Text(this.detailPost!.comments.toString())
+                    Text(this.detailPost!.commentsList.length.toString())
                       .fontSize(14).fontColor('#666666').margin({ left: 4 })
                   }
                   .onClick(() => { this.showPostComments = !this.showPostComments; })
@@ -2137,7 +2396,7 @@ struct ProfileView {
                           Row() {
                             Text(comment.username)
                               .fontSize(13).fontColor('#FF9800').fontWeight(FontWeight.Medium)
-                            if (this.displayNickname.length > 0 && comment.username === this.displayNickname) {
+                            if (comment.userId.length > 0 && comment.userId === AppStorage.get<string>('login_username')) {
                               Text('我')
                                 .fontSize(10).fontColor('#FFFFFF')
                                 .backgroundColor('#FFD700')
@@ -2148,7 +2407,16 @@ struct ProfileView {
                           }
                           .margin({ right: 6 })
 
-                          Text(comment.content).fontSize(14).fontColor('#333333')
+                          Text(comment.content).fontSize(14).fontColor('#333333').layoutWeight(1)
+
+                          if (comment.userId.length > 0 && comment.userId === AppStorage.get<string>('login_username')) {
+                            Text('删除')
+                              .fontSize(11).fontColor('#FF0000')
+                              .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+                              .onClick(() => {
+                                this.handleDetailDeleteComment(comment, index);
+                              })
+                          }
                         }
                         .width('100%').padding({ top: 4, bottom: 4 })
                         .alignItems(VerticalAlign.Center)
@@ -2188,20 +2456,24 @@ struct ProfileView {
                     Image(this.getPostImage(post))
                       .width('100%').aspectRatio(1).objectFit(ImageFit.Cover)
                       .borderRadius(8).backgroundColor('#E8E8E8')
-                    Row() {
-                      Image($r('app.media.good')).width(12).height(12).fillColor('#FF6B6B')
-                      Text(post.likes.toString()).fontSize(11).fontColor('#666666').margin({ left: 2 })
-                      Image($r('app.media.comment')).width(12).height(12).fillColor('#666666').margin({ left: 8 })
-                      Text(post.comments.toString()).fontSize(11).fontColor('#666666').margin({ left: 2 })
-                    }
-                    .width('100%').padding({ top: 4 }).justifyContent(FlexAlign.Start)
                   }
                   .width('100%')
                   .onClick(() => {
-                    this.detailPost = post;
+                    const displayName: string = this.displayNickname.length > 0 ? this.displayNickname : '我';
+                    const updated: FeedItemType = {
+                      id: post.id, postId: post.postId, type: post.type, url: post.url,
+                      username: displayName, userId: post.userId, avatar: post.avatar,
+                      description: post.description, createTime: post.createTime,
+                      likes: post.likes, comments: post.comments, isLiked: post.isLiked,
+                      commentsList: post.commentsList, categoryId: post.categoryId,
+                      categoryName: post.categoryName
+                    };
+                    this.detailPost = updated;
                     this.showPostComments = false;
                     this.postCommentText = '';
+                    this.showAllWorks = true;
                     this.showPostDetail = true;
+                    this.loadDetailComments(post.postId);
                   })
                 }
               })
@@ -2298,6 +2570,22 @@ struct ProfileView {
                   .backgroundColor('rgba(255,255,255,0.1)')
                   .fontColor('rgba(255,255,255,0.8)').fontSize(13).borderRadius(18)
                   .onClick(() => { this.handleLogout(); })
+                Button('注销')
+                  .width(80).height(36)
+                  .backgroundColor('rgba(255,50,50,0.2)')
+                  .fontColor('#FF4444').fontSize(13).borderRadius(18).margin({ left: 8 })
+                  .onClick(() => {
+                    promptAction.showDialog({
+                      title: '注销账号',
+                      message: '确定要永久删除账号吗？所有数据将被清空且不可恢复！',
+                      buttons: [
+                        { text: '取消', color: '#999999' },
+                        { text: '确认注销', color: '#FF0000' }
+                      ]
+                    }).then((data) => {
+                      if (data.index === 1) this.handleDeleteAccount();
+                    });
+                  })
 
                 Blank()
                 Text(this.syncStatusText)
@@ -2316,7 +2604,10 @@ struct ProfileView {
               if (this.isLoggedIn) {
                 Text('查看全部 >')
                   .fontSize(14).fontColor('#FFD700').fontWeight(FontWeight.Medium)
-                  .onClick(() => { this.showAllWorks = true; })
+                  .onClick(() => {
+                    this.onLoadMyWorks();
+                    this.showAllWorks = true;
+                  })
               }
             }
             .width('90%').margin({ top: 20, bottom: 12 })
@@ -2329,11 +2620,21 @@ struct ProfileView {
                       Image(this.getPostImage(post))
                         .width('100%').aspectRatio(1).borderRadius(8).backgroundColor('#E8E8E8')
                         .onClick(() => {
-                          this.detailPost = post;
+                          const displayName: string = this.displayNickname.length > 0 ? this.displayNickname : '我';
+                          const updated: FeedItemType = {
+                            id: post.id, postId: post.postId, type: post.type, url: post.url,
+                            username: displayName, userId: post.userId, avatar: post.avatar,
+                            description: post.description, createTime: post.createTime,
+                            likes: post.likes, comments: post.comments, isLiked: post.isLiked,
+                            commentsList: post.commentsList, categoryId: post.categoryId,
+                            categoryName: post.categoryName
+                          };
+                          this.detailPost = updated;
                           this.showPostComments = false;
                           this.postCommentText = '';
                           this.showAllWorks = true;
                           this.showPostDetail = true;
+                          this.loadDetailComments(post.postId);
                         })
                     }
                   })
@@ -2519,6 +2820,9 @@ struct ProfileView {
                     AppStorage.set<string>('display_bio', result.bio!);
                     this.showEditBio = false;
                     promptAction.showToast({ message: '个性签名已更新', duration: 1500 });
+                    if (distributedApi.isReady()) {
+                      distributedApi.sync(false);
+                    }
                   } catch (err) {
                     promptAction.showToast({ message: '更新失败: ' + (err as Error).message, duration: 2000 });
                   }

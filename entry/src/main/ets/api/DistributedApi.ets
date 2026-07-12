@@ -1,11 +1,13 @@
 // api/DistributedApi.ts
 import { http } from '@kit.NetworkKit';
 import { common } from '@kit.AbilityKit';
+import { preferences } from '@kit.ArkData';
 import { PostModel } from '../model/PostModel';
 import { PostRepository } from '../repository/PostRepository';
 import { CommentRepository } from '../repository/CommentRepository';
 import { CommentModel } from '../model/CommentModel';
 import { Constants } from '../common/Constants';
+import { LikedCache, PostLikedInfo } from '../common/LikedCache';
 
 /** 同步结果 */
 export interface SyncResult {
@@ -39,6 +41,7 @@ interface ServerResponse {
   urls?: string[];
   acceptedPostIds?: string[];
   acceptedCommentIds?: string[];
+  likedPostIds?: string[];
   syncCount?: number;
   errorMsg?: string;
 }
@@ -49,19 +52,42 @@ interface ServerResponse {
 class DistributedApi {
   private baseUrl: string = Constants.BASE_URL;
 
+  private tokenStore: preferences.Preferences | null = null;
+
+  private ensureTokenStore(): preferences.Preferences {
+    if (this.tokenStore !== null) return this.tokenStore;
+    const ctx: common.Context = AppStorage.get<common.Context>('globalAbilityContext') as common.Context;
+    if (ctx !== undefined) {
+      this.tokenStore = preferences.getPreferencesSync(ctx, { name: 'DistributedApiPrefs' });
+    }
+    return this.tokenStore as object as preferences.Preferences;
+  }
+
   /**
    * 获取当前登录 token
    */
   private getToken(): string {
-    const token: string = AppStorage.get<string>('login_token') || '';
-    return token;
+    try {
+      const store = this.ensureTokenStore();
+      if (store !== null && store.hasSync('login_token')) {
+        return store.getSync('login_token', '') as string;
+      }
+    } catch (_) {}
+    return '';
   }
 
   /**
    * 保存 token
    */
   private saveToken(token: string): void {
-    AppStorage.set<string>('login_token', token);
+    try {
+      AppStorage.set<string>('login_token', token);
+      const store = this.ensureTokenStore();
+      if (store !== null) {
+        store.putSync('login_token', token);
+        store.flush();
+      }
+    } catch (_) {}
   }
 
   /**
@@ -206,17 +232,21 @@ class DistributedApi {
           this.saveToken(token);
         }
 
-        // ★ 从登录响应中直接设置所有个人资料
-        const displayNickname: string = (data['displayNickname'] as string) || '用户';
-        const avatar: string = (data['avatar'] as string) || '';
-        const bio: string = (data['bio'] as string) || '这个人很懒，什么都没有写...';
+        // ★ 从登录响应中设置个人资料，仅当服务端返回有效值时才覆盖
+        const serverNick: string = (data['displayNickname'] as string) || '';
+        const serverAvatar: string = (data['avatar'] as string) || '';
+        const serverBio: string = (data['bio'] as string) || '';
+        if (serverNick.length > 0) {
+          AppStorage.set<string>('display_nickname', serverNick);
+        }
+        if (serverAvatar.length > 0) {
+          AppStorage.set<string>('display_avatar', serverAvatar);
+        }
+        if (serverBio.length > 0) {
+          AppStorage.set<string>('display_bio', serverBio);
+        }
 
-        // ★ 强制写入 AppStorage，确保 UI 能读取到
-        AppStorage.set<string>('display_nickname', displayNickname);
-        AppStorage.set<string>('display_avatar', avatar);
-        AppStorage.set<string>('display_bio', bio);
-
-        console.info('[DistributedApi] 登录成功，昵称: ' + displayNickname + ', 头像: ' + avatar);
+        console.info('[DistributedApi] 登录成功，昵称: ' + serverNick + ', 头像: ' + serverAvatar);
 
         return { success: true, data: true, message: '登录成功' };
       }
@@ -279,6 +309,11 @@ class DistributedApi {
       const emptyBody: Record<string, Object> = {};
       await this.request('POST', '/api/auth/logout', emptyBody);
       AppStorage.set<string>('login_token', '');
+      const store = this.ensureTokenStore();
+      if (store !== null) {
+        store.putSync('login_token', '');
+        store.flush();
+      }
     } catch (_) {}
   }
 
@@ -326,6 +361,35 @@ class DistributedApi {
   /**
    * 上传图片
    */
+  async like(postId: string): Promise<ServerResponse | null> {
+    const body: Record<string, Object> = {};
+    body['postId'] = postId;
+    return await this.request('POST', '/api/like', body);
+  }
+
+  async unlike(postId: string): Promise<ServerResponse | null> {
+    const body: Record<string, Object> = {};
+    body['postId'] = postId;
+    return await this.request('POST', '/api/unlike', body);
+  }
+
+  async deletePost(postId: string): Promise<ServerResponse | null> {
+    const body: Record<string, Object> = {};
+    body['postId'] = postId;
+    return await this.request('POST', '/api/auth/delete-post', body);
+  }
+
+  async deleteComment(commentId: string): Promise<ServerResponse | null> {
+    const body: Record<string, Object> = {};
+    body['commentId'] = commentId;
+    return await this.request('POST', '/api/auth/delete-comment', body);
+  }
+
+  async deleteAccount(): Promise<ServerResponse | null> {
+    const emptyBody: Record<string, Object> = {};
+    return await this.request('POST', '/api/auth/delete-account', emptyBody);
+  }
+
   async uploadImages(imagePaths: string[]): Promise<string[]> {
     try {
       const body: Record<string, Object> = {};
@@ -378,10 +442,11 @@ class DistributedApi {
               ',"categoryId":"' + p.categoryId.replace(/"/g, '\\"') +
               '","categoryName":"' + p.categoryName.replace(/"/g, '\\"') +
               '","likeCount":' + p.likeCount +
-              ',"commentCount":' + p.commentCount +
+              '","commentCount":' + p.commentCount +
               ',"createTime":' + p.createTime +
               ',"updateTime":' + p.updateTime +
-              ',"deviceId":"' + p.deviceId.replace(/"/g, '\\"') + '"}';
+              ',"deviceId":"' + p.deviceId.replace(/"/g, '\\"') +
+              ',"isDeleted":' + (p.isDeleted ? 'true' : 'false') + '}';
           }
           postsJson += ']';
         }
@@ -508,6 +573,17 @@ class DistributedApi {
             const upserted: boolean = await commentRepo.upsertRemoteComment(comment);
             if (upserted) totalSynced++;
           }
+        }
+
+        const likedPostIds: string[] = downloadResult.likedPostIds || [];
+        if (likedPostIds.length > 0) {
+          LikedCache.setCurrentUser(AppStorage.get<string>('login_username') || '');
+          LikedCache.extractFromFeed(
+            likedPostIds.map((pid: string): PostLikedInfo => {
+              return { postId: pid, isLiked: true };
+            })
+          );
+          console.info('[DistributedApi] 同步点赞状态: ' + likedPostIds.length + ' 条');
         }
       }
 

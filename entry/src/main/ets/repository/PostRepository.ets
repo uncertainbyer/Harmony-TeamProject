@@ -332,11 +332,31 @@ export class PostRepository {
       PostModel.getTableName()
     );
     predicates.equalTo('sync_status', 0);
+    predicates.equalTo('is_deleted', 0);
 
     const resultSet: relationalStore.ResultSet = await this.rdbManager.query(predicates);
     const posts: PostModel[] = this.parseResultSetToPosts(resultSet);
     resultSet.close();
     return posts;
+  }
+
+  async updateUserPostsUserName(userId: string, newName: string): Promise<number> {
+    const values: relationalStore.ValuesBucket = {};
+    values['user_name'] = newName;
+    values['sync_status'] = 0;
+    values['update_time'] = Date.now();
+
+    const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
+      PostModel.getTableName()
+    );
+    predicates.equalTo('user_id', userId);
+
+    const rowCount: number = await this.rdbManager.update(
+      PostModel.getTableName(),
+      values,
+      predicates
+    );
+    return rowCount;
   }
 
   /**

@@ -126,6 +126,14 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_comments_owner_updated ON comments(owner_user_id, server_updated_at);
             CREATE INDEX IF NOT EXISTS idx_comments_owner_post ON comments(owner_user_id, post_id);
+
+            CREATE TABLE IF NOT EXISTS likes (
+              user_id TEXT NOT NULL,
+              post_id TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              PRIMARY KEY(user_id, post_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_likes_user ON likes(user_id);
             """
         )
 
@@ -283,6 +291,8 @@ class SocialPhotoHandler(BaseHTTPRequestHandler):
             "/api/auth/login": self.handle_login,
             "/api/auth/logout": self.handle_logout,
             "/api/images/upload": self.handle_image_upload,
+            "/api/like": self.handle_like,
+            "/api/unlike": self.handle_unlike,
             "/api/sync/upload": self.handle_sync_upload,
             "/api/sync/download": self.handle_sync_download,
             "/api/clear": self.handle_clear,
@@ -636,6 +646,44 @@ class SocialPhotoHandler(BaseHTTPRequestHandler):
         )
         return comment_id
 
+    def handle_like(self, body: Dict[str, Any]) -> None:
+        user = self.authenticate()
+        if user is None:
+            return
+        post_id = normalize_text(body.get("postId"))
+        if not post_id:
+            self.send_api(False, "postId is required", None)
+            return
+        with connect_db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO likes(user_id, post_id, created_at) VALUES (?, ?, ?)",
+                (user["id"], post_id, now_ms()),
+            )
+            conn.execute(
+                "UPDATE posts SET like_count = (SELECT COUNT(*) FROM likes WHERE post_id = ?), server_updated_at = ? WHERE post_id = ?",
+                (post_id, now_ms(), post_id),
+            )
+        self.send_api(True, "", {})
+
+    def handle_unlike(self, body: Dict[str, Any]) -> None:
+        user = self.authenticate()
+        if user is None:
+            return
+        post_id = normalize_text(body.get("postId"))
+        if not post_id:
+            self.send_api(False, "postId is required", None)
+            return
+        with connect_db() as conn:
+            conn.execute(
+                "DELETE FROM likes WHERE user_id = ? AND post_id = ?",
+                (user["id"], post_id),
+            )
+            conn.execute(
+                "UPDATE posts SET like_count = (SELECT COUNT(*) FROM likes WHERE post_id = ?), server_updated_at = ? WHERE post_id = ?",
+                (post_id, now_ms(), post_id),
+            )
+        self.send_api(True, "", {})
+
     def handle_clear(self, body: Dict[str, Any]) -> None:
         user = self.authenticate()
         if user is None:
@@ -644,6 +692,7 @@ class SocialPhotoHandler(BaseHTTPRequestHandler):
             conn.execute("DELETE FROM posts WHERE owner_user_id = ?", (user["id"],))
             conn.execute("DELETE FROM comments WHERE owner_user_id = ?", (user["id"],))
             conn.execute("DELETE FROM images WHERE owner_user_id = ?", (user["id"],))
+            conn.execute("DELETE FROM likes WHERE user_id = ?", (user["id"],))
         self.send_api(True, "all data cleared", {})
 
     def handle_sync_download(self, body: Dict[str, Any]) -> None:
@@ -668,6 +717,10 @@ class SocialPhotoHandler(BaseHTTPRequestHandler):
                 """,
                 (user["id"], last_sync),
             ).fetchall()
+            like_rows = conn.execute(
+                "SELECT post_id FROM likes WHERE user_id = ?",
+                (user["id"],),
+            ).fetchall()
 
         latest = last_sync
         for row in list(post_rows) + list(comment_rows):
@@ -678,6 +731,7 @@ class SocialPhotoHandler(BaseHTTPRequestHandler):
             {
                 "posts": [row_to_post(row) for row in post_rows],
                 "comments": [row_to_comment(row) for row in comment_rows],
+                "likedPostIds": [row["post_id"] for row in like_rows],
                 "lastSyncTimestamp": latest,
             },
         )

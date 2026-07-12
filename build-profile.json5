@@ -3,7 +3,7 @@
     "products": [
       {
         "name": "default",
-        "targetSdkVersion": "6.1.0(23)",
+        "targetSdkVersion": "6.1.1(24)",
         "compatibleSdkVersion": "5.0.0(12)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
@@ -30,11 +30,11 @@
         "material": {
           "certpath": "C:\\Users\\huajilianqiujun\\.ohos\\config\\default_Photo_IjgsAIbZ7ldLLjxqr9oaW7Vc3yontOUPgiixz_Mirok=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001BA02FFE697D70A4034E9C34BA43B8D583C6E21D69F09934BBDA91DBED5BE3A384D98B80C1DB0793",
+          "keyPassword": "0000001BB23EE7D84A9EA3617BEAEFE23CDD69A00510C69A0531950EAFAD95AB89E7D3FCE4E4422E3B5AB3",
           "profile": "C:\\Users\\huajilianqiujun\\.ohos\\config\\default_Photo_IjgsAIbZ7ldLLjxqr9oaW7Vc3yontOUPgiixz_Mirok=.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "C:\\Users\\huajilianqiujun\\.ohos\\config\\default_Photo_IjgsAIbZ7ldLLjxqr9oaW7Vc3yontOUPgiixz_Mirok=.p12",
-          "storePassword": "0000001B90C7CF06B4E66A4E4BE546B9FF9D40B60766F93B6DE9572B6B232F5C215DC6536993C3F346B742"
+          "storePassword": "0000001BFEF6DE9719D1CBBDB82E3C3D0D2F1174C0AA8CC96A10BB8F466708367058210F639E072ECC63A9"
         }
       }
     ]
