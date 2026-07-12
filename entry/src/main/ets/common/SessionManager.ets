@@ -1,51 +1,30 @@
 // entry/src/main/ets/common/SessionManager.ets
-import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { distributedApi } from '../api/DistributedApi';
-
-const PREF_NAME: string = 'session_pref';
-const KEY_USERNAME: string = 'username';
-const KEY_PASSWORD: string = 'password';
-
-export class SavedCredential {
-  username: string = '';
-  password: string = '';
-}
+import { CloudCredential, CloudCredentialStore } from './CloudCredentialStore';
 
 export class SessionManager {
 
-  private static async getPrefs(): Promise<preferences.Preferences> {
+  private static getContext(): common.Context {
     const maybeCtx: common.Context | undefined = AppStorage.get<common.Context>('uiAbilityContext');
     if (maybeCtx === undefined) {
       throw new Error('uiAbilityContext not found');
     }
-    return await preferences.getPreferences(maybeCtx, PREF_NAME);
+    return maybeCtx;
   }
 
   static async saveCredentials(username: string, password: string): Promise<void> {
     try {
-      const prefs: preferences.Preferences = await SessionManager.getPrefs();
-      await prefs.put(KEY_USERNAME, username);
-      await prefs.put(KEY_PASSWORD, password);
-      await prefs.flush();
+      await CloudCredentialStore.save(SessionManager.getContext(), username, password);
       console.info('[SessionManager] 登录信息已保存');
     } catch (err) {
       console.error('[SessionManager] 保存失败:', (err as Error).message);
     }
   }
 
-  static async getSavedCredentials(): Promise<SavedCredential | null> {
+  static async getSavedCredentials(): Promise<CloudCredential | null> {
     try {
-      const prefs: preferences.Preferences = await SessionManager.getPrefs();
-      const username: string = await prefs.get(KEY_USERNAME, '') as string;
-      const password: string = await prefs.get(KEY_PASSWORD, '') as string;
-      if (username.length > 0 && password.length > 0) {
-        const cred: SavedCredential = new SavedCredential();
-        cred.username = username;
-        cred.password = password;
-        return cred;
-      }
-      return null;
+      return await CloudCredentialStore.get(SessionManager.getContext());
     } catch (err) {
       console.error('[SessionManager] 读取失败:', (err as Error).message);
       return null;
@@ -54,10 +33,7 @@ export class SessionManager {
 
   static async clearCredentials(): Promise<void> {
     try {
-      const prefs: preferences.Preferences = await SessionManager.getPrefs();
-      await prefs.delete(KEY_USERNAME);
-      await prefs.delete(KEY_PASSWORD);
-      await prefs.flush();
+      await CloudCredentialStore.clear(SessionManager.getContext());
       console.info('[SessionManager] 登录信息已清除');
     } catch (err) {
       console.error('[SessionManager] 清除失败:', (err as Error).message);
@@ -66,7 +42,7 @@ export class SessionManager {
 
   static async autoLogin(syncAfterLogin: boolean = true): Promise<boolean> {
     try {
-      const creds: SavedCredential | null = await SessionManager.getSavedCredentials();
+      const creds: CloudCredential | null = await SessionManager.getSavedCredentials();
       if (creds === null) return false;
       const result = await distributedApi.login(creds.username, creds.password, syncAfterLogin);
       if (result.success) {

@@ -8,6 +8,7 @@ import { CommentModel } from '../model/CommentModel';
 import { PostRepository } from '../repository/PostRepository';
 import { CommentRepository } from '../repository/CommentRepository';
 import { UUIDUtil } from '../utils/UUIDUtil';
+import { CloudCredential, CloudCredentialStore } from '../common/CloudCredentialStore';
 import { SyncEventBus, SyncRequestListener } from '../distributed/SyncEventBus';
 import {
   SyncAnnouncement, SyncCommentData, SyncPostData, SyncEnvelope
@@ -113,6 +114,12 @@ interface LogoutBody {
   dummy: string;
 }
 
+interface SyncTransferResult {
+  upload: SyncUploadResponse;
+  download: SyncDownloadResponse;
+  totalCount: number;
+}
+
 // ===== JSON 工具 =====
 class JsonSafe {
   static parseObject(text: string): Record<string, Object> {
@@ -203,7 +210,9 @@ export class DistributedService {
   private currentState: DistributedSyncState = new DistributedSyncState();
   private initialized: boolean = false;
   private syncing: boolean = false;
-  private syncAgain: boolean = false;
+  private activeSyncTask: Promise<SyncResult> | null = null;
+  private activeSyncIsFull: boolean = false;
+  private authRecoveryTask: Promise<boolean> | null = null;
   private pollTask: PollingTask = new PollingTask();
 
   private syncRequestListener: SyncRequestListener = this.onSyncRequestedInternal.bind(this);
@@ -233,7 +242,7 @@ export class DistributedService {
       throw new Error('数据库初始化失败: ' + dbResult.errorMsg);
     }
 
-    AppStorage.set<string>('deviceName', context.abilityInfo.name);
+    AppStorage.setOrCreate<string>('deviceName', context.abilityInfo.name);
 
     let savedToken: string | undefined = AppStorage.get<string>(DistributedService.AUTH_TOKEN_KEY);
     let savedUserId: string | undefined = AppStorage.get<string>(DistributedService.USER_ID_KEY);
@@ -382,8 +391,8 @@ export class DistributedService {
 
   // ===== 主动同步 =====
   async syncNow(forceFull: boolean = false): Promise<SyncResult> {
-    const result: SyncResult = new SyncResult();
     if (!this.initialized) {
+      const result: SyncResult = new SyncResult();
       result.errorMsg = '分布式同步服务未初始化';
       return result;
     }
@@ -392,15 +401,35 @@ export class DistributedService {
     //    登录后 localDeviceId = 服务器返回的 userId（不以 "local_" 开头）
     //    未登录时 localDeviceId = "local_xxx"
     if (this.localDeviceId.startsWith('local_')) {
+      const result: SyncResult = new SyncResult();
       result.errorMsg = '未登录';
       return result;
     }
 
-    if (this.syncing) {
-      this.syncAgain = true;
-      result.success = true;
-      return result;
+    if (this.activeSyncTask !== null) {
+      const activeWasFull: boolean = this.activeSyncIsFull;
+      const activeResult: SyncResult = await this.activeSyncTask;
+      if (forceFull && !activeWasFull && activeResult.success) {
+        return await this.syncNow(true);
+      }
+      return activeResult;
     }
+
+    this.activeSyncIsFull = forceFull;
+    const task: Promise<SyncResult> = this.runSync(forceFull);
+    this.activeSyncTask = task;
+    try {
+      return await task;
+    } finally {
+      if (this.activeSyncTask === task) {
+        this.activeSyncTask = null;
+        this.activeSyncIsFull = false;
+      }
+    }
+  }
+
+  private async runSync(forceFull: boolean): Promise<SyncResult> {
+    const result: SyncResult = new SyncResult();
 
     this.syncing = true;
     this.currentState.state = SyncConnectionState.SYNCING;
@@ -409,33 +438,45 @@ export class DistributedService {
     this.emitState();
 
     try {
-      const pushResult: SyncUploadResponse = await this.pushLocalData(forceFull);
-      let totalCount: number = pushResult.acceptedPostIds.length + pushResult.acceptedCommentIds.length;
+      let transfer: SyncTransferResult;
+      try {
+        transfer = await this.performSyncTransfer(forceFull);
+      } catch (err) {
+        const firstError: BusinessError = err as BusinessError;
+        if (!this.isAuthTokenError(firstError.message)) {
+          throw new Error(firstError.message);
+        }
 
-      const pullResult: SyncDownloadResponse = await this.pullRemoteData();
-      totalCount += pullResult.posts.length + pullResult.comments.length;
+        this.currentState.lastMessage = '登录凭据已过期，正在自动恢复登录...';
+        this.emitState();
+        const recovered: boolean = await this.recoverAuthentication();
+        if (!recovered) {
+          throw new Error('登录凭据已失效，自动重新登录失败，请检查账号密码');
+        }
+
+        this.currentState.state = SyncConnectionState.SYNCING;
+        this.currentState.lastMessage = '登录已恢复，正在继续同步';
+        this.emitState();
+        transfer = await this.performSyncTransfer(forceFull);
+      }
 
       result.success = true;
-      result.syncCount = totalCount;
+      result.syncCount = transfer.totalCount;
       this.currentState.state = SyncConnectionState.CONNECTED;
       this.currentState.lastSyncTime = Date.now();
-      this.currentState.lastMessage = '已发送 ' + pushResult.acceptedPostIds.length + ' 条帖子、'
-        + pushResult.acceptedCommentIds.length + ' 条评论';
+      this.currentState.lastMessage = '已发送 ' + transfer.upload.acceptedPostIds.length + ' 条帖子、'
+        + transfer.upload.acceptedCommentIds.length + ' 条评论，接收 '
+        + transfer.download.posts.length + ' 条帖子、' + transfer.download.comments.length + ' 条评论';
       this.currentState.transferProgress = 100;
       this.emitState();
 
-      if (totalCount > 0) {
+      if (transfer.totalCount > 0) {
         this.eventBus.emitRemoteDataChanged();
       }
       return result;
     } catch (err) {
       const error: BusinessError = err as BusinessError;
       result.errorMsg = error.message;
-      if (this.isAuthTokenError(result.errorMsg)) {
-        result.errorMsg = '登录已过期，请重新登录';
-        this.clearCloudLoginState(result.errorMsg);
-        return result;
-      }
       this.currentState.state = SyncConnectionState.ERROR;
       this.currentState.lastMessage = '同步失败: ' + result.errorMsg;
       this.emitState();
@@ -443,12 +484,6 @@ export class DistributedService {
     } finally {
       this.syncing = false;
       this.emitState();
-      if (this.syncAgain) {
-        this.syncAgain = false;
-        this.syncNow(false).catch((err: Error) => {
-          console.error('[DistributedService] 合并同步失败:', err.message);
-        });
-      }
     }
   }
 
@@ -570,7 +605,7 @@ export class DistributedService {
         existingIds.add(unsyncedPosts[i].postId);
       }
       for (let i = 0; i < allPosts.length; i++) {
-        if (!existingIds.has(allPosts[i].postId)) {
+        if (!existingIds.has(allPosts[i].postId) && allPosts[i].userId === this.localDeviceId) {
           postsToSync.push(allPosts[i]);
         }
       }
@@ -580,7 +615,7 @@ export class DistributedService {
         existingIds.add(unsyncedComments[i].commentId);
       }
       for (let i = 0; i < allComments.length; i++) {
-        if (!existingIds.has(allComments[i].commentId)) {
+        if (!existingIds.has(allComments[i].commentId) && allComments[i].userId === this.localDeviceId) {
           commentsToSync.push(allComments[i]);
         }
       }
@@ -635,9 +670,9 @@ export class DistributedService {
     return data;
   }
 
-  private async pullRemoteData(): Promise<SyncDownloadResponse> {
+  private async pullRemoteData(forceFull: boolean = false): Promise<SyncDownloadResponse> {
     let lastSyncVal: number | undefined = AppStorage.get<number>(DistributedService.LAST_SYNC_KEY);
-    const lastSync: number = lastSyncVal ?? 0;
+    const lastSync: number = forceFull ? 0 : (lastSyncVal ?? 0);
 
     let pullBody: SyncDownloadBody = {
       lastSyncTimestamp: lastSync,
@@ -650,18 +685,18 @@ export class DistributedService {
       this.requireResponseData<SyncDownloadResponse>(response, '同步拉取失败');
 
     for (let i = 0; i < data.posts.length; i++) {
-      const postData: SyncPostData = data.posts[i];
+      const postData: SyncPostData = this.hydrateSyncPost(data.posts[i]);
       const post: PostModel = postData.toModel(new Map<string, string>());
       await this.postRepository.upsertRemotePost(post);
     }
     for (let i = 0; i < data.comments.length; i++) {
-      const commentData: SyncCommentData = data.comments[i];
+      const commentData: SyncCommentData = this.hydrateSyncComment(data.comments[i]);
       const comment: CommentModel = commentData.toModel();
       await this.commentRepository.upsertRemoteComment(comment);
     }
 
     if (data.lastSyncTimestamp > lastSync) {
-      AppStorage.set<number>(DistributedService.LAST_SYNC_KEY, data.lastSyncTimestamp);
+      AppStorage.setOrCreate<number>(DistributedService.LAST_SYNC_KEY, data.lastSyncTimestamp);
     }
 
     this.currentState.receivedPostCount += data.posts.length;
@@ -671,11 +706,53 @@ export class DistributedService {
     return data;
   }
 
+  private hydrateSyncPost(source: SyncPostData): SyncPostData {
+    const target: SyncPostData = new SyncPostData();
+    target.postId = source.postId;
+    target.userId = source.userId;
+    target.userName = source.userName;
+    target.userAvatar = source.userAvatar;
+    target.content = source.content;
+    target.imagePaths = source.imagePaths;
+    target.categoryId = source.categoryId;
+    target.categoryName = source.categoryName;
+    target.likeCount = source.likeCount;
+    target.commentCount = source.commentCount;
+    target.createTime = source.createTime;
+    target.updateTime = source.updateTime;
+    target.deviceId = source.deviceId;
+    target.isDeleted = source.isDeleted;
+    return target;
+  }
+
+  private hydrateSyncComment(source: SyncCommentData): SyncCommentData {
+    const target: SyncCommentData = new SyncCommentData();
+    target.commentId = source.commentId;
+    target.postId = source.postId;
+    target.userId = source.userId;
+    target.userName = source.userName;
+    target.userAvatar = source.userAvatar;
+    target.content = source.content;
+    target.parentId = source.parentId;
+    target.replyToUserId = source.replyToUserId;
+    target.replyToUserName = source.replyToUserName;
+    target.level = source.level;
+    target.likeCount = source.likeCount;
+    target.createTime = source.createTime;
+    target.deviceId = source.deviceId;
+    target.isDeleted = source.isDeleted;
+    return target;
+  }
+
   private onPollTick(): void {
     if (this.initialized && !this.syncing) {
       let self: DistributedService = this;
-      self.pullRemoteData().catch((err: Error) => {
-        console.warn('[DistributedService] 轮询拉取失败:', err.message);
+      self.syncNow(false).then((result: SyncResult): void => {
+        if (!result.success) {
+          console.warn('[DistributedService] 轮询同步失败:', result.errorMsg);
+        }
+      }).catch((err: Error) => {
+        console.warn('[DistributedService] 轮询同步异常:', err.message);
       });
     }
   }
@@ -692,26 +769,74 @@ export class DistributedService {
       lowerMessage.includes('missing authorization token');
   }
 
-  private clearCloudLoginState(message: string): void {
-    this.pollTask.stop();
-    this.syncAgain = false;
+  private async performSyncTransfer(forceFull: boolean): Promise<SyncTransferResult> {
+    let upload: SyncUploadResponse;
+    try {
+      upload = await this.pushLocalData(forceFull);
+    } catch (err) {
+      throw new Error('上传阶段失败: ' + (err as Error).message);
+    }
 
-    AppStorage.delete(DistributedService.AUTH_TOKEN_KEY);
-    AppStorage.delete(DistributedService.USER_ID_KEY);
-    AppStorage.delete(DistributedService.LAST_SYNC_KEY);
+    let download: SyncDownloadResponse;
+    try {
+      download = await this.pullRemoteData(forceFull);
+    } catch (err) {
+      throw new Error('下载阶段失败: ' + (err as Error).message);
+    }
+    const result: SyncTransferResult = {
+      upload: upload,
+      download: download,
+      totalCount: upload.acceptedPostIds.length + upload.acceptedCommentIds.length +
+        download.posts.length + download.comments.length
+    };
+    return result;
+  }
 
-    this.localDeviceId = 'local_' + UUIDUtil.generateShort();
-    this.currentState.state = SyncConnectionState.ERROR;
-    this.currentState.lastMessage = message;
-    this.currentState.receivedPostCount = 0;
-    this.currentState.receivedCommentCount = 0;
-    this.currentState.transferProgress = 0;
-    this.emitState();
+  private async recoverAuthentication(): Promise<boolean> {
+    if (this.authRecoveryTask !== null) {
+      return await this.authRecoveryTask;
+    }
+
+    this.authRecoveryTask = this.loginWithSavedCredentials();
+    try {
+      return await this.authRecoveryTask;
+    } finally {
+      this.authRecoveryTask = null;
+    }
+  }
+
+  private async loginWithSavedCredentials(): Promise<boolean> {
+    if (this.context === null) {
+      return false;
+    }
+
+    try {
+      const credential: CloudCredential | null = await CloudCredentialStore.get(this.context);
+      if (credential === null) {
+        console.warn('[DistributedService] 未找到可用于恢复登录的账号凭据');
+        return false;
+      }
+
+      const loginBody: LoginBody = {
+        username: credential.username,
+        password: credential.password,
+        deviceName: AppStorage.get<string>('deviceName') ?? 'HarmonyOS设备'
+      };
+      const responseObj: Record<string, Object> =
+        await this.post('/auth/login', JsonSafe.stringify(loginBody));
+      const response: ApiResponse<LoginResponse> = this.toApiResponse<LoginResponse>(responseObj);
+      const loginData: LoginResponse = this.requireResponseData<LoginResponse>(response, '自动重新登录失败');
+      this.applyLoginResponse(loginData, '登录已恢复', false);
+      return true;
+    } catch (err) {
+      console.warn('[DistributedService] 自动重新登录失败:', (err as Error).message);
+      return false;
+    }
   }
 
   private applyLoginResponse(data: LoginResponse, successMessage: string, syncAfterLogin: boolean = true): void {
-    AppStorage.set<string>(DistributedService.AUTH_TOKEN_KEY, data.token);
-    AppStorage.set<string>(DistributedService.USER_ID_KEY, data.userId);
+    AppStorage.setOrCreate<string>(DistributedService.AUTH_TOKEN_KEY, data.token);
+    AppStorage.setOrCreate<string>(DistributedService.USER_ID_KEY, data.userId);
 
     this.localDeviceId = data.userId;
     this.currentState.lastMessage = successMessage;
@@ -858,15 +983,17 @@ function btoa(binaryStr: string): string {
   let i: number = 0;
   while (i < bytes.length) {
     const b1: number = bytes[i++];
-    const b2: number = i < bytes.length ? bytes[i++] : 0;
-    const b3: number = i < bytes.length ? bytes[i++] : 0;
+    const hasB2: boolean = i < bytes.length;
+    const b2: number = hasB2 ? bytes[i++] : 0;
+    const hasB3: boolean = i < bytes.length;
+    const b3: number = hasB3 ? bytes[i++] : 0;
     const enc1: number = b1 >> 2;
     const enc2: number = ((b1 & 3) << 4) | (b2 >> 4);
     const enc3: number = ((b2 & 15) << 2) | (b3 >> 6);
     const enc4: number = b3 & 63;
     output += chars.charAt(enc1) + chars.charAt(enc2)
-      + (i >= bytes.length + 1 ? '=' : chars.charAt(enc3))
-      + (i >= bytes.length ? '=' : chars.charAt(enc4));
+      + (hasB2 ? chars.charAt(enc3) : '=')
+      + (hasB3 ? chars.charAt(enc4) : '=');
   }
   return output;
 }

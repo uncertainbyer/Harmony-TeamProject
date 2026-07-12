@@ -1074,29 +1074,27 @@ struct ProfileView {
   }
 
   async handleSync(): Promise<void> {
+    this.syncStatusText = '同步中...';
     const readyToSync: boolean = await this.ensureCloudLogin(true);
     if (!readyToSync) {
+      this.syncStatusText = '请先登录';
       promptAction.showToast({ message: '请先登录', duration: 2000 });
       return;
     }
     try {
-      let result = await distributedApi.sync(true);
-      if (!result.success && result.errorMsg === '登录已过期，请重新登录') {
-        const reloginOk: boolean = await SessionManager.autoLogin(false);
-        this.isLoggedIn = reloginOk && distributedApi.isReady() && !distributedApi.localDeviceId.startsWith('local_');
-        if (reloginOk) {
-          result = await distributedApi.sync(true);
-        }
-      }
+      const result = await distributedApi.sync(true);
       if (result.success) {
         this.isLoggedIn = true;
+        this.syncStatusText = '同步成功 · ' + result.syncCount + ' 条';
         promptAction.showToast({ message: '同步成功，共 ' + result.syncCount + ' 条', duration: 2000 });
       } else {
         this.isLoggedIn = distributedApi.isReady() && !distributedApi.localDeviceId.startsWith('local_');
+        this.syncStatusText = '同步失败: ' + result.errorMsg;
         promptAction.showToast({ message: '同步失败: ' + result.errorMsg, duration: 2000 });
       }
     } catch (err) {
       this.isLoggedIn = distributedApi.isReady() && !distributedApi.localDeviceId.startsWith('local_');
+      this.syncStatusText = '同步异常: ' + (err as Error).message;
       promptAction.showToast({ message: '同步异常: ' + (err as Error).message, duration: 2000 });
     }
   }
