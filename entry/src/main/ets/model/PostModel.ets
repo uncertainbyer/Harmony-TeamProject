@@ -86,7 +86,11 @@ export class PostModel {
     bucket['user_name'] = this.userName;
     bucket['user_avatar'] = this.userAvatar;
     bucket['content'] = this.content;
-    bucket['image_paths'] = this.imagePaths;
+    let pathsVal: string = this.imagePaths as string;
+    if (typeof pathsVal !== 'string') {
+      try { pathsVal = JSON.stringify(pathsVal); } catch (_) { pathsVal = '[]'; }
+    }
+    bucket['image_paths'] = pathsVal;
     bucket['image_count'] = this.imageCount;
     bucket['category_id'] = this.categoryId;
     bucket['category_name'] = this.categoryName;

@@ -353,25 +353,64 @@ class DistributedApi {
       const unsyncedPosts: PostModel[] = await postRepo.queryUnsyncedPosts();
       const unsyncedComments: CommentModel[] = await commentRepo.queryUnsyncedComments();
 
-      // 构建上传 body
-      const uploadBody: Record<string, Object> = {};
-      uploadBody['deviceId'] = this.localDeviceId;
-
-      // ★ 修复：去掉 JSON.stringify，让 request() 方法统一序列化
-      if (unsyncedPosts.length > 0) {
-        uploadBody['posts'] = this.buildPostArray(unsyncedPosts);  // 直接传数组
+      // 构建上传 body — 手动构建 JSON 字符串避免 Record<string, Object> 序列化数组问题
+      let uploadJson: string = '';
+      if (unsyncedPosts.length === 0 && unsyncedComments.length === 0) {
+        uploadJson = '{"deviceId":"' + this.localDeviceId.replace(/"/g, '\\"') + '"}';
+      } else {
+        let postsJson: string = '[]';
+        if (unsyncedPosts.length > 0) {
+          postsJson = '[';
+          for (let pi = 0; pi < unsyncedPosts.length; pi++) {
+            const p: PostModel = unsyncedPosts[pi];
+            if (pi > 0) postsJson += ',';
+            const imgArr: string[] = p.getImagePathArray();
+            let imgArrJson: string = '[]';
+            try { imgArrJson = JSON.stringify(imgArr); } catch (_) {}
+            const imgJson: string = '"' + imgArrJson.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+            const content: string = p.content.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            postsJson += '{"postId":"' + p.postId.replace(/"/g, '\\"') +
+              '","userId":"' + p.userId.replace(/"/g, '\\"') +
+              '","userName":"' + p.userName.replace(/"/g, '\\"') +
+              '","userAvatar":"' + p.userAvatar.replace(/"/g, '\\"') +
+              '","content":"' + content + '","imagePaths":' + imgJson +
+              ',"imageCount":' + p.imageCount +
+              ',"categoryId":"' + p.categoryId.replace(/"/g, '\\"') +
+              '","categoryName":"' + p.categoryName.replace(/"/g, '\\"') +
+              '","likeCount":' + p.likeCount +
+              ',"commentCount":' + p.commentCount +
+              ',"createTime":' + p.createTime +
+              ',"updateTime":' + p.updateTime +
+              ',"deviceId":"' + p.deviceId.replace(/"/g, '\\"') + '"}';
+          }
+          postsJson += ']';
+        }
+        let commentsJson: string = '[]';
+        if (unsyncedComments.length > 0) {
+          commentsJson = '[';
+          for (let ci = 0; ci < unsyncedComments.length; ci++) {
+            const c: CommentModel = unsyncedComments[ci];
+            if (ci > 0) commentsJson += ',';
+            const content: string = c.content.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            commentsJson += '{"commentId":"' + c.commentId.replace(/"/g, '\\"') +
+              '","postId":"' + c.postId.replace(/"/g, '\\"') +
+              '","userId":"' + c.userId.replace(/"/g, '\\"') +
+              '","userName":"' + c.userName.replace(/"/g, '\\"') +
+              '","content":"' + content + '","createTime":' + c.createTime +
+              ',"deviceId":"' + c.deviceId.replace(/"/g, '\\"') + '"}';
+          }
+          commentsJson += ']';
+        }
+        uploadJson = '{"deviceId":"' + this.localDeviceId.replace(/"/g, '\\"') +
+          '","posts":' + postsJson + ',"comments":' + commentsJson + '}';
       }
-      if (unsyncedComments.length > 0) {
-        uploadBody['comments'] = this.buildCommentArray(unsyncedComments);  // 直接传数组
-      }
 
-      // ★ 输出日志，方便调试
       console.info('[DistributedApi] 上传帖子: ' + unsyncedPosts.length + ' 条');
       if (unsyncedPosts.length > 0) {
         console.info('[DistributedApi] 第一条帖子 imagePaths: ' + unsyncedPosts[0].imagePaths);
       }
 
-      const uploadResult: ServerResponse | null = await this.request('POST', '/api/sync/upload', uploadBody);
+      const uploadResult: ServerResponse | null = await this.requestRaw('POST', '/api/sync/upload', uploadJson);
 
       if (uploadResult) {
         console.info('[DistributedApi] 上传响应: ' + JSON.stringify(uploadResult));
@@ -431,7 +470,16 @@ class DistributedApi {
               post.userName = (sp['userName'] as string) || '';
               post.userAvatar = (sp['userAvatar'] as string) || '';
               post.content = (sp['content'] as string) || '';
-              post.imagePaths = (sp['imagePaths'] as string) || '';
+              const rawImagePaths: Object | undefined = sp['imagePaths'];
+              if (typeof rawImagePaths === 'string') {
+                post.imagePaths = rawImagePaths as string;
+              } else {
+                try {
+                  post.imagePaths = JSON.stringify(rawImagePaths);
+                } catch (_) {
+                  post.imagePaths = '[]';
+                }
+              }
               post.imageCount = (sp['imageCount'] as number) || 0;
               post.categoryId = (sp['categoryId'] as string) || '';
               post.categoryName = (sp['categoryName'] as string) || '';
@@ -484,45 +532,72 @@ class DistributedApi {
     }
   }
 
-  private buildPostArray(posts: PostModel[]): Record<string, Object>[] {
-    const result: Record<string, Object>[] = [];
-    for (let i = 0; i < posts.length; i++) {
-      const p: PostModel = posts[i];
-      const item: Record<string, Object> = {};
-      item['postId'] = p.postId;
-      item['userId'] = p.userId;
-      item['userName'] = p.userName;
-      item['userAvatar'] = p.userAvatar;
-      item['content'] = p.content;
-      item['imagePaths'] = p.imagePaths;
-      item['imageCount'] = p.imageCount;
-      item['categoryId'] = p.categoryId;
-      item['categoryName'] = p.categoryName;
-      item['likeCount'] = p.likeCount;
-      item['commentCount'] = p.commentCount;
-      item['createTime'] = p.createTime;
-      item['updateTime'] = p.updateTime;
-      item['deviceId'] = p.deviceId;
-      result.push(item);
-    }
-    return result;
-  }
+  private async requestRaw(method: string, path: string, jsonBody: string): Promise<ServerResponse | null> {
+    const url: string = this.baseUrl + path;
+    console.info('[DistributedApi] 发起请求(POST): ' + url);
+    try {
+      let requestMethod: http.RequestMethod = http.RequestMethod.POST;
+      if (method === 'GET') {
+        requestMethod = http.RequestMethod.GET;
+      } else if (method === 'PUT') {
+        requestMethod = http.RequestMethod.PUT;
+      }
 
-  private buildCommentArray(comments: CommentModel[]): Record<string, Object>[] {
-    const result: Record<string, Object>[] = [];
-    for (let i = 0; i < comments.length; i++) {
-      const c: CommentModel = comments[i];
-      const item: Record<string, Object> = {};
-      item['commentId'] = c.commentId;
-      item['postId'] = c.postId;
-      item['userId'] = c.userId;
-      item['userName'] = c.userName;
-      item['content'] = c.content;
-      item['createTime'] = c.createTime;
-      item['deviceId'] = c.deviceId;
-      result.push(item);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      const token: string = this.getToken();
+      if (token.length > 0) {
+        headers['authorization'] = 'Bearer ' + token;
+      }
+
+      console.info('[DistributedApi] 请求体长度: ' + jsonBody.length + ' 字符');
+      console.info('[DistributedApi] 请求体预览: ' + jsonBody.substring(0, 500));
+
+      const requestOptions: http.HttpRequestOptions = {
+        method: requestMethod,
+        header: headers,
+        extraData: jsonBody,
+        connectTimeout: 15000,
+        readTimeout: 15000
+      };
+
+      return new Promise<ServerResponse | null>((resolve: (value: ServerResponse | null) => void) => {
+        const httpRequest: http.HttpRequest = http.createHttp();
+        httpRequest.request(url, requestOptions, (err: Error, response: http.HttpResponse) => {
+          httpRequest.destroy();
+          if (err) {
+            console.error('[DistributedApi] HTTP 请求失败: ' + err.message);
+            resolve(null);
+            return;
+          }
+          console.info('[DistributedApi] 响应状态码: ' + response.responseCode.toString());
+          const rawResult: Object = response.result;
+          if (response.responseCode === 200) {
+            let parsedResult: ServerResponse | null = null;
+            if (typeof rawResult === 'string') {
+              try {
+                parsedResult = JSON.parse(rawResult as string) as ServerResponse;
+              } catch (parseErr) {
+                console.error('[DistributedApi] JSON 解析失败: ' + (parseErr as Error).message);
+                resolve(null);
+                return;
+              }
+            } else {
+              parsedResult = rawResult as ServerResponse;
+            }
+            console.info('[DistributedApi] 响应成功: ' + JSON.stringify(parsedResult).substring(0, 200));
+            resolve(parsedResult);
+          } else {
+            console.error('[DistributedApi] 非200响应: ' + JSON.stringify(rawResult));
+            resolve(null);
+          }
+        });
+      });
+    } catch (e) {
+      console.error('[DistributedApi] requestRaw 异常: ' + (e as Error).message);
+      return null;
     }
-    return result;
   }
 }
 
