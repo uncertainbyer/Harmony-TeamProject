@@ -1,9 +1,9 @@
+// api/PostApi.ts
 import { PostService } from '../service/PostService';
 import { PostModel } from '../model/PostModel';
 import { AIClassifyResult } from '../service/AIClassifyService';
 import { Constants, ErrorCode } from '../common/Constants';
 
-/** 统一 API 返回类型 */
 export interface ApiResult<T> {
   success: boolean;
   data: T | null;
@@ -11,21 +11,14 @@ export interface ApiResult<T> {
   message: string;
 }
 
-/**
- * 帖子 API —— 代理 PostService 所有方法
- *
- * UI 调用示例（SocialMediaMain）：
- * ```
- * const r = await postApi.getList(1, 20);
- * if (r.success && r.data) { this.feedData = ... }
- * ```
- */
 class PostApi {
   private static instance: PostApi | null = null;
   private svc: PostService = new PostService();
 
   static getInstance(): PostApi {
-    if (!PostApi.instance) { PostApi.instance = new PostApi(); }
+    if (!PostApi.instance) {
+      PostApi.instance = new PostApi();
+    }
     return PostApi.instance;
   }
 
@@ -88,6 +81,8 @@ class PostApi {
   async getDetail(postId: string): Promise<ApiResult<PostModel>> {
     try {
       const post = await this.svc.getPostDetail(postId);
+      if (post) {
+      }
       return post
         ? { success: true, data: post, code: ErrorCode.SUCCESS, message: '' }
         : { success: false, data: null, code: ErrorCode.DATA_NOT_FOUND, message: '帖子不存在' };
@@ -108,7 +103,7 @@ class PostApi {
 
   async like(postId: string): Promise<ApiResult<number>> {
     try {
-      const n = await this.svc.likePost(postId);
+      const n = await this.svc.likePost(postId);  // ★ 不再传 userId
       return { success: true, data: n, code: ErrorCode.SUCCESS, message: '' };
     } catch (e) {
       return { success: false, data: null, code: ErrorCode.SERVER_ERROR, message: (e as Error).message };
@@ -117,7 +112,7 @@ class PostApi {
 
   async unlike(postId: string): Promise<ApiResult<number>> {
     try {
-      const n = await this.svc.unlikePost(postId);
+      const n = await this.svc.unlikePost(postId);  // ★ 不再传 userId
       return { success: true, data: n, code: ErrorCode.SUCCESS, message: '' };
     } catch (e) {
       return { success: false, data: null, code: ErrorCode.SERVER_ERROR, message: (e as Error).message };
@@ -149,30 +144,6 @@ class PostApi {
     } catch (e) {
       return { success: false, data: null, code: ErrorCode.SERVER_ERROR, message: (e as Error).message };
     }
-  }
-
-  // ============ 工具：PostModel → UI FeedItemType 兼容对象 ============
-
-  /** 映射 PostModel 为 UI 可用的 FeedItemType */
-  static toFeedItem(post: PostModel): Record<string, Object> {
-    const imgs: string[] = post.getImagePathArray();
-    return {
-      "postId": post.postId,
-      "type": 'image',
-      "coverImage": imgs.length > 0 ? imgs[0] : '',
-      "imagePaths": imgs,
-      "imageCount": post.imageCount,
-      "username": post.userName,
-      "avatar": post.userAvatar,
-      "description": post.content,
-      "likes": post.likeCount,
-      "comments": post.commentCount,
-      "isLiked": false,
-      "commentsList": [] as string[],
-      "categoryId": post.categoryId,
-      "categoryName": post.categoryName,
-      "createTime": post.createTime,
-    };
   }
 }
 

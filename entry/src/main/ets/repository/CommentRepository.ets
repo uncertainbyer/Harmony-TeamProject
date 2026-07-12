@@ -304,27 +304,19 @@ export class CommentRepository {
    * @returns 删除的行数
    */
   async deleteComment(commentId: string): Promise<number> {
-    try {
-      const values: relationalStore.ValuesBucket = {};
-      values['is_deleted'] = 1;
-      values['sync_status'] = 0;
+    const values: relationalStore.ValuesBucket = {};
+    values['is_deleted'] = 1;
 
-      const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
-        CommentModel.getTableName()
-      );
-      predicates.equalTo('comment_id', commentId);
+    const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
+      CommentModel.getTableName()
+    );
+    predicates.equalTo('comment_id', commentId);
 
-      const rowCount: number = await this.rdbManager.update(
-        CommentModel.getTableName(),
-        values,
-        predicates
-      );
-      return rowCount;
-    } catch (err) {
-      const errorMsg: string = (err as Error).message;
-      console.error('[CommentRepository] 删除评论失败:', errorMsg);
-      throw new Error('删除评论失败: ' + errorMsg);
-    }
+    return await this.rdbManager.update(
+      CommentModel.getTableName(),
+      values,
+      predicates
+    );
   }
 
   /**
@@ -337,6 +329,7 @@ export class CommentRepository {
         CommentModel.getTableName()
       );
       predicates.equalTo('sync_status', 0);
+      predicates.equalTo('is_deleted', 0);
 
       const resultSet: relationalStore.ResultSet = await this.rdbManager.query(predicates);
       const comments: CommentModel[] = this.parseResultSetToComments(resultSet);
@@ -498,6 +491,24 @@ export class CommentRepository {
     } while (resultSet.goToNextRow());
 
     return comments;
+  }
+
+  async updateUserCommentsUserName(userId: string, newName: string): Promise<number> {
+    const values: relationalStore.ValuesBucket = {};
+    values['user_name'] = newName;
+    values['sync_status'] = 0;
+
+    const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
+      CommentModel.getTableName()
+    );
+    predicates.equalTo('user_id', userId);
+
+    const rowCount: number = await this.rdbManager.update(
+      CommentModel.getTableName(),
+      values,
+      predicates
+    );
+    return rowCount;
   }
 }
 
