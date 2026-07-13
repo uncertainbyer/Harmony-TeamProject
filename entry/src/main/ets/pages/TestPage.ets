@@ -5,6 +5,8 @@ import { aiClassifyApi } from '../api/AIClassifyApi';
 import { distributedApi } from '../api/DistributedApi';
 import { Constants } from '../common/Constants';
 import { promptAction } from '@kit.ArkUI';
+import { http } from '@kit.NetworkKit';
+import fs from '@ohos.file.fs';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { common } from '@kit.AbilityKit';
 import { LikedCache, PostLikedInfo } from '../common/LikedCache';
@@ -120,9 +122,61 @@ struct SocialMediaMain {
   }
 
   handleImageClick(imageUrl: string): void {
-    console.info('[SocialMediaMain] 点击图片URL: ' + imageUrl);
     this.previewImageUrl = imageUrl;
     this.showGlobalImagePreview = true;
+  }
+
+  private async handleDownloadImage(imageUrl: string): Promise<void> {
+    if (!imageUrl.startsWith('http')) {
+      promptAction.showToast({ message: '仅支持下载网络图片', duration: 1500 });
+      return;
+    }
+    try {
+      promptAction.showToast({ message: '正在下载...', duration: 1500 });
+      const httpReq: http.HttpRequest = http.createHttp();
+      httpReq.request(imageUrl, { method: http.RequestMethod.GET }, async (err: Error, resp: http.HttpResponse) => {
+        httpReq.destroy();
+        if (err) {
+          promptAction.showToast({ message: '下载失败: ' + err.message, duration: 2000 });
+          return;
+        }
+        if (resp.responseCode === 200) {
+          try {
+            const raw: Object = resp.result;
+            let buf: ArrayBuffer | null = null;
+            if (raw instanceof ArrayBuffer) {
+              buf = raw as ArrayBuffer;
+            } else if (typeof raw === 'string') {
+              const str: string = raw as string;
+              buf = new ArrayBuffer(str.length);
+              const arr: Uint8Array = new Uint8Array(buf);
+              for (let i = 0; i < str.length; i++) arr[i] = str.charCodeAt(i);
+            }
+            if (buf !== null && buf.byteLength > 0) {
+              const ctx: common.Context | undefined = AppStorage.get<common.Context>('globalAbilityContext');
+              if (ctx === undefined) {
+                promptAction.showToast({ message: '无法获取上下文', duration: 1500 });
+                return;
+              }
+              const fileName: string = 'IMG_' + Date.now() + '.jpg';
+              const picDir: string = '/data/storage/el2/base/files/Pictures';
+              try { fs.mkdirSync(picDir, true); } catch (_) {}
+              const filePath: string = picDir + '/' + fileName;
+              const file: fs.File = fs.openSync(filePath, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY);
+              fs.writeSync(file.fd, buf);
+              fs.closeSync(file);
+              promptAction.showToast({ message: '已保存到: ' + filePath, duration: 3000 });
+            } else {
+              promptAction.showToast({ message: '下载数据为空', duration: 1500 });
+            }
+          } catch (e) {
+            promptAction.showToast({ message: '保存失败: ' + (e as Error).message, duration: 2000 });
+          }
+        }
+      });
+    } catch (e) {
+      promptAction.showToast({ message: '下载异常: ' + (e as Error).message, duration: 2000 });
+    }
   }
 
   // ★ 退出时清所有数据
@@ -488,6 +542,7 @@ struct SocialMediaMain {
       let serverDeleted: boolean = false;
       try {
         const delResult = await distributedApi.deletePost(postId);
+        console.info('[SocialMediaMain] deletePost响应: ' + (delResult !== null ? JSON.stringify(delResult) : 'null'));
         if (delResult !== null && delResult.success === true) {
           serverDeleted = true;
         }
@@ -816,6 +871,14 @@ struct SocialMediaMain {
           Image(this.previewImageUrl)
             .width('90%').height('70%')
             .objectFit(ImageFit.Contain).borderRadius(8)
+          Column() {
+            Button('下载到本地')
+              .width(140).height(36)
+              .backgroundColor('rgba(255,255,255,0.2)')
+              .fontColor(Color.White).fontSize(14).borderRadius(18)
+              .onClick(() => { this.handleDownloadImage(this.previewImageUrl); })
+          }
+          .position({ x: '50%', y: '92%' }).translate({ x: -70, y: 0 })
           Text('✕')
             .fontSize(30).fontColor(Color.White)
             .position({ x: '90%', y: '5%' })
