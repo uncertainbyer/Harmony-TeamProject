@@ -2,7 +2,7 @@
 import { http } from '@kit.NetworkKit';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
-import { image } from '@kit.ImageKit';
+import { fileIo } from '@kit.CoreFileKit';
 import { PostModel } from '../model/PostModel';
 import { PostRepository } from '../repository/PostRepository';
 import { CommentRepository } from '../repository/CommentRepository';
@@ -395,13 +395,13 @@ class DistributedApi {
     const remoteUrls: string[] = [];
     for (let i = 0; i < imagePaths.length; i++) {
       try {
-        console.info('[DistributedApi] 尝试通过 ImageSource 读取: ' + imagePaths[i]);
-        const source: image.ImageSource = image.createImageSource(imagePaths[i]);
-        const pixelMap: image.PixelMap = await source.createPixelMap();
-        const packer: image.ImagePacker = image.createImagePacker();
-        const packedData: ArrayBuffer = await packer.packToData(pixelMap, { format: 'image/jpeg', quality: 80 });
-        source.release();
-        const uint8Array: Uint8Array = new Uint8Array(packedData);
+        console.info('[DistributedApi] 尝试fileIo读取: ' + imagePaths[i]);
+        const file: fileIo.File = fileIo.openSync(imagePaths[i], fileIo.OpenMode.READ_ONLY);
+        const stat: fileIo.Stat = fileIo.statSync(file.fd);
+        const buf: ArrayBuffer = new ArrayBuffer(stat.size);
+        fileIo.readSync(file.fd, buf);
+        fileIo.closeSync(file);
+        const uint8Array: Uint8Array = new Uint8Array(buf);
         let binaryStr: string = '';
         for (let j = 0; j < uint8Array.byteLength; j++) {
           binaryStr += String.fromCharCode(uint8Array[j]);
@@ -569,6 +569,7 @@ class DistributedApi {
             post.createTime = (sp['createTime'] as number) || Date.now();
             post.updateTime = (sp['updateTime'] as number) || Date.now();
             post.deviceId = (sp['deviceId'] as string) || '';
+            post.isDeleted = (sp['isDeleted'] as boolean) || false;
             post.syncStatus = 1;
             const upserted: boolean = await postRepo.upsertRemotePost(post);
             if (upserted) totalSynced++;

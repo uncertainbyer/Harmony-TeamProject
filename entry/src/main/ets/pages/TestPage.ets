@@ -6,7 +6,6 @@ import { distributedApi } from '../api/DistributedApi';
 import { Constants } from '../common/Constants';
 import { promptAction } from '@kit.ArkUI';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
-import { image } from '@kit.ImageKit';
 import { common } from '@kit.AbilityKit';
 import { LikedCache, PostLikedInfo } from '../common/LikedCache';
 import { SessionManager } from '../common/SessionManager';
@@ -14,6 +13,7 @@ import { camera, cameraPicker } from '@kit.CameraKit';
 import { PostModel } from '../model/PostModel';
 import { PostRepository } from '../repository/PostRepository';
 import { CommentRepository } from '../repository/CommentRepository';
+import { AIClassifyService } from '../service/AIClassifyService';
 
 interface TabItemType {
   title: string;
@@ -496,6 +496,10 @@ struct SocialMediaMain {
       const postRepo: PostRepository = new PostRepository();
       await postRepo.deletePost(postId, serverDeleted);
 
+      if (distributedApi.isReady()) {
+        await distributedApi.sync(false);
+      }
+
       const newFeedData: FeedItemType[] = [];
       for (let i = 0; i < this.feedData.length; i++) {
         if (this.feedData[i].postId !== postId) {
@@ -525,7 +529,20 @@ struct SocialMediaMain {
       const loginUsername: string = AppStorage.get<string>('login_username') || 'local_user';
       const deviceId: string = AppStorage.get<string>('device_id') || 'local_device';
 
-      // 先上传图片到服务端获取远程 URL
+      // 先用本地路径做 AI 分类
+      let autoCategoryId: string = 'cat_other';
+      let autoCategoryName: string = '其他';
+      if (imageUrl.length > 0) {
+        try {
+          const aiResult = await AIClassifyService.getInstance().classifyImageFromUri(imageUrl);
+          if (aiResult.success) {
+            autoCategoryId = aiResult.categoryId;
+            autoCategoryName = aiResult.categoryName;
+          }
+        } catch (_) {}
+      }
+
+      // 上传图片到服务端获取远程 URL
       let remotePaths: string[] = [];
       if (imageUrl.length > 0) {
         if (distributedApi.isReady()) {
@@ -539,7 +556,7 @@ struct SocialMediaMain {
       const publishAvatar = this.displayAvatar;
 
       const result = await postApi.publishWithAI(
-        loginUsername, publishName, publishAvatar, description, remotePaths, deviceId
+        loginUsername, publishName, publishAvatar, description, remotePaths, deviceId, autoCategoryId, autoCategoryName
       );
 
       if (result.success && result.data !== null) {
@@ -895,7 +912,7 @@ struct FeedList {
               })
             }
             .margin({ bottom: 10 })
-          })
+          }, (item: FeedItemType): string => { return item.postId; })
           if (this.hasMore) {
             ListItem() {
               Row() {
@@ -1099,14 +1116,6 @@ struct FeedItem {
     this.isSending = false;
   }
 
-  private getImageSrc(): string | Resource {
-    if (this.feed.url.length > 0) {
-      console.info('[FeedItem] 图片URL: ' + this.feed.url);
-      return this.feed.url;
-    }
-    return $r('app.media.nai');
-  }
-
   private getAvatarSrc(): string | Resource {
     if (this.feed.avatar.length > 0) return this.feed.avatar;
     return $r('app.media.nai');
@@ -1162,12 +1171,13 @@ struct FeedItem {
         .fontSize(15).fontColor('#444444')
         .padding({ left: 12, right: 12, top: 8 }).width('100%')
 
-      Stack() {
-        Image(this.getImageSrc())
-          .width('100%').height(200).objectFit(ImageFit.Cover)
-          .borderRadius(8).margin({ top: 8 }).backgroundColor('#E0E0E0')
-          .onClick(() => { this.onImageClick(this.feed.url); })
-      }
+      Image(this.feed.url.length > 0 ? this.feed.url : $r('app.media.nai'))
+        .width('100%').height(200)
+        .objectFit(ImageFit.Contain)
+        .borderRadius(8).margin({ top: 8 }).backgroundColor('#E0E0E0')
+        .onClick(() => {
+          if (this.feed.url.length > 0) { this.onImageClick(this.feed.url); }
+        })
 
       Row() {
         Row() {

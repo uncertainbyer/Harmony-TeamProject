@@ -138,14 +138,18 @@ export class PostService {
 
   async publishPostWithAIClassify(
     userId: string, userName: string, userAvatar: string,
-    content: string, imagePaths: string[], deviceId: string
+    content: string, imagePaths: string[], deviceId: string,
+    categoryId?: string, categoryName?: string
   ): Promise<PostModel> {
+    const finalCategoryId: string = categoryId || 'cat_other';
+    const finalCategoryName: string = categoryName || '其他';
+
     const post: PostModel = await this.publishPost(
       userId, userName, userAvatar, content, imagePaths,
-      'cat_other', '其他', deviceId
+      finalCategoryId, finalCategoryName, deviceId
     );
 
-    if (imagePaths.length > 0) {
+    if (imagePaths.length > 0 && categoryId === undefined) {
       try {
         const classifyResult: AIClassifyResult =
           await AIClassifyService.getInstance().classifyImageFromUri(imagePaths[0]);
@@ -154,11 +158,6 @@ export class PostService {
           post.categoryId = classifyResult.categoryId;
           post.categoryName = classifyResult.categoryName;
         }
-        const bucket = post.toValuesBucket();
-        const keys: string = JSON.stringify(Object.keys(bucket));
-        console.info('[PostService] ValuesBucket 列名: ' + keys);
-
-        await this.postRepository.insertPost(post);
       } catch (err) {
         console.warn('[PostService] AI 分类异常:', (err as Error).message);
       }

@@ -39,10 +39,14 @@ class PostApi {
 
   async publishWithAI(
     userId: string, userName: string, userAvatar: string,
-    content: string, imagePaths: string[], deviceId: string
+    content: string, imagePaths: string[], deviceId: string,
+    categoryId?: string, categoryName?: string
   ): Promise<ApiResult<PostModel>> {
     try {
-      const post = await this.svc.publishPostWithAIClassify(userId, userName, userAvatar, content, imagePaths, deviceId);
+      const post = await this.svc.publishPostWithAIClassify(
+        userId, userName, userAvatar, content, imagePaths, deviceId,
+        categoryId, categoryName
+      );
       return { success: true, data: post, code: ErrorCode.SUCCESS, message: '' };
     } catch (e) {
       return { success: false, data: null, code: ErrorCode.SERVER_ERROR, message: (e as Error).message };
