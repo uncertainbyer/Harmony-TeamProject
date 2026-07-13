@@ -788,15 +788,15 @@ struct SocialMediaMain {
             }
             .width('20%').height(this.tabBarHeight)
             .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-            .onClick(() => {
+            .onClick(async (): Promise<void> => {
               if (this.currentTabIndex !== index) {
                 this.currentTabIndex = index;
                 this.currentTitle = item.title;
-                if (distributedApi.isReady()) {
-                  distributedApi.sync(false);
-                }
                 if (index === 0) {
-                  this.loadFeed(true);
+                  if (distributedApi.isReady()) {
+                    await distributedApi.sync(false);
+                  }
+                  await this.loadFeed(true);
                 }
               }
             })
@@ -1491,8 +1491,7 @@ struct PublishView {
   @State description: string = '';
   @State selectedImage: string = '';
   @State hasSelectedImage: boolean = false;
-  @State isPressed1: boolean = false;
-  @State isPressed2: boolean = false;
+
   @State isPublishing: boolean = false;
   @State selectedTags: string[] = [];
   @Prop uiContext?: common.Context;
@@ -1571,46 +1570,6 @@ struct PublishView {
             .onClick(() => { this.selectImage(); })
           }
           .width('90%').justifyContent(FlexAlign.Start).margin({ top: 16 })
-
-          Row() {
-            Stack() {
-              Circle()
-                .width(22).height(22)
-                .fill(this.isPressed1 ? '#FFD700' : '#E0E0E0')
-                .stroke(this.isPressed1 ? '#FFD700' : '#CCCCCC')
-                .strokeWidth(1.5)
-              if (this.isPressed1) {
-                Text('✓')
-                  .fontSize(14).fontColor(Color.White).fontWeight(FontWeight.Bold)
-              }
-            }
-            .width(22).height(22)
-            .onClick(() => { this.isPressed1 = !this.isPressed1; })
-            .margin({ right: 8 })
-
-            Text('添加位置').fontSize(15).fontColor('#666666')
-
-            Blank()
-
-            Stack() {
-              Circle()
-                .width(22).height(22)
-                .fill(this.isPressed2 ? '#FFD700' : '#E0E0E0')
-                .stroke(this.isPressed2 ? '#FFD700' : '#CCCCCC')
-                .strokeWidth(1.5)
-              if (this.isPressed2) {
-                Text('✓')
-                  .fontSize(14).fontColor(Color.White).fontWeight(FontWeight.Bold)
-              }
-            }
-            .width(22).height(22)
-            .onClick(() => { this.isPressed2 = !this.isPressed2; })
-            .margin({ right: 8 })
-
-            Text('公开').fontSize(15).fontColor('#666666')
-          }
-          .width('90%').padding({ top: 16, bottom: 16 })
-          .borderWidth({ bottom: 1 }).borderColor('#EEEEEE')
 
           Column() {
             Text('添加标签').fontSize(14).fontColor('#999999').width('100%').margin({ bottom: 8 })
@@ -1699,6 +1658,10 @@ struct CategoryView {
   @State currentPhotos: Array<PhotoItemType> = [];
   @State isLoadingCategory: boolean = false;
   @State categoryError: string = '';
+  @State catDetailPost: PostModel | null = null;
+  @State showCatDetail: boolean = false;
+  @State catComments: CommentItemType[] = [];
+  @State catShowComments: boolean = false;
   @Prop isLoggedIn: boolean = false;
   @Prop activeTag: string = '';
   onGoToProfile?: () => void;
@@ -1784,6 +1747,48 @@ struct CategoryView {
     } catch (_) {}
   }
 
+  private async loadCatPostDetail(postId: string): Promise<void> {
+    try {
+      const result = await postApi.getDetail(postId);
+      if (result.success && result.data !== null) {
+        this.catDetailPost = result.data;
+        this.showCatDetail = true;
+        this.catComments = [];
+      }
+    } catch (_) {}
+  }
+
+  private async loadCatComments(postId: string): Promise<void> {
+    try {
+      const result = await commentApi.getAllByPost(postId);
+      if (result.success && result.data !== null) {
+        const items: CommentItemType[] = [];
+        for (let i = 0; i < result.data.length; i++) {
+          items.push({
+            username: result.data[i].userName, content: result.data[i].content,
+            userId: result.data[i].userId, commentId: result.data[i].commentId
+          });
+        }
+        this.catComments = items;
+      }
+    } catch (_) {}
+  }
+
+  private getTimeDisplay(timestamp: number): string {
+    if (timestamp <= 0) return '刚刚';
+    const now = Date.now();
+    const diffMs = now - timestamp;
+    const diffMin = Math.floor(diffMs / 60000);
+    const diffHour = Math.floor(diffMin / 60);
+    const diffDay = Math.floor(diffHour / 24);
+    if (diffMin < 1) return '刚刚';
+    if (diffMin < 60) return diffMin + '分钟前';
+    if (diffHour < 24) return diffHour + '小时前';
+    if (diffDay < 7) return diffDay + '天前';
+    const date = new Date(timestamp);
+    return date.getFullYear() + '-' + (date.getMonth() + 1).toString().padStart(2, '0') + '-' + date.getDate().toString().padStart(2, '0') + ' ' + date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');
+  }
+
   build() {
     if (!this.isLoggedIn) {
       Column() {
@@ -1864,6 +1869,7 @@ struct CategoryView {
                     Image(photo.image).width('100%').aspectRatio(1).objectFit(ImageFit.Cover)
                       .borderRadius(8).backgroundColor('#E8E8E8')
                   }.width('100%')
+                  .onClick(() => { this.loadCatPostDetail(photo.postId); })
                 }
               })
             }
@@ -1902,6 +1908,7 @@ struct CategoryView {
                       .borderRadius(8).backgroundColor('#E8E8E8')
                   }
                   .width('100%')
+                  .onClick(() => { this.loadCatPostDetail(photo.postId); })
                 }
               })
             }
@@ -1909,6 +1916,76 @@ struct CategoryView {
             .width('95%').padding({ top: 12, bottom: 12 }).layoutWeight(1)
           }
           .width('100%').height('100%').backgroundColor('#F8F8FC')
+        }
+
+        if (this.showCatDetail && this.catDetailPost !== null) {
+          Stack() {
+            Column() {}.width('100%').height('100%').backgroundColor('rgba(0,0,0,0.5)')
+              .onClick(() => { this.showCatDetail = false; this.catComments = []; })
+            Scroll() {
+              Column() {
+                Image(this.catDetailPost!.getImagePathArray().length > 0 ? this.catDetailPost!.getImagePathArray()[0] : $r('app.media.nai'))
+                  .width('100%').aspectRatio(1).objectFit(ImageFit.Cover).backgroundColor('#E8E8E8')
+
+                Column() {
+                  Row() {
+                    Row() {
+                      Image(this.catDetailPost!.userAvatar.length > 0 ? this.catDetailPost!.userAvatar : $r('app.media.nai'))
+                        .width(28).height(28).borderRadius(14).margin({ right: 6 })
+                      Text(this.catDetailPost!.userName).fontSize(15).fontWeight(FontWeight.Medium).fontColor('#333333')
+                      if (this.catDetailPost!.userId.length > 0 && this.catDetailPost!.userId === AppStorage.get<string>('login_username')) {
+                        Text('我').fontSize(10).fontColor('#FFFFFF').backgroundColor('#FFD700')
+                          .borderRadius(8).padding({ left: 6, right: 6, top: 2, bottom: 2 }).margin({ left: 4 })
+                      }
+                    }
+                    .alignItems(VerticalAlign.Center)
+                    Blank()
+                    Text(this.getTimeDisplay(this.catDetailPost!.createTime)).fontSize(11).fontColor('#999999')
+                  }
+                  .width('100%').padding({ top: 8, bottom: 8 })
+
+                  Text(this.catDetailPost!.content || '').fontSize(14).fontColor('#444444').width('100%')
+
+                  Row() {
+                    Row() {
+                      Image($r('app.media.good')).width(16).height(16).fillColor('#FF6B6B')
+                      Text(this.catDetailPost!.likeCount.toString()).fontSize(12).fontColor('#666666').margin({ left: 4 })
+                    }
+                    .margin({ right: 20 })
+                    Row() {
+                      Image($r('app.media.comment')).width(16).height(16).fillColor('#666666')
+                      Text(this.catDetailPost!.commentCount.toString()).fontSize(12).fontColor('#666666').margin({ left: 4 })
+                    }
+                    .onClick(() => {
+                      this.catShowComments = !this.catShowComments;
+                      if (this.catShowComments && this.catComments.length === 0) {
+                        this.loadCatComments(this.catDetailPost!.postId);
+                      }
+                    })
+                  }
+                  .margin({ top: 8 })
+
+                  if (this.catShowComments) {
+                    Text('评论列表 (' + this.catComments.length + ')')
+                      .fontSize(14).fontWeight(FontWeight.Medium).fontColor('#333333').width('100%').margin({ top: 12, bottom: 6 })
+                    ForEach(this.catComments, (c: CommentItemType) => {
+                      Row() {
+                        Text(c.username).fontSize(13).fontColor('#FF9800').fontWeight(FontWeight.Medium)
+                        if (c.userId.length > 0 && c.userId === AppStorage.get<string>('login_username')) {
+                          Text('我').fontSize(10).fontColor('#FFFFFF').backgroundColor('#FFD700')
+                            .borderRadius(8).padding({ left: 6, right: 6, top: 2, bottom: 2 }).margin({ left: 4 })
+                        }
+                        Text(': ' + c.content).fontSize(13).fontColor('#333333')
+                      }.width('100%').padding({ top: 2, bottom: 2 })
+                    })
+                  }
+                }
+                .padding({ left: 12, right: 12, bottom: 12 }).width('100%')
+              }
+            }
+            .width('90%').backgroundColor(Color.White).borderRadius(12).height('80%')
+          }
+          .width('100%').height('100%').position({ x: 0, y: 0 }).zIndex(999)
         }
       }
       .width('100%').height('100%').backgroundColor('#F8F8FC')
