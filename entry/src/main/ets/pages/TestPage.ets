@@ -50,6 +50,7 @@ interface FeedItemType {
   commentsList: CommentItemType[];
   categoryId: string;
   categoryName: string;
+  tags: string[];
 }
 
 PersistentStorage.persistProp('ai_recognize_records', []);
@@ -88,6 +89,7 @@ struct SocialMediaMain {
   @State loadError: string = '';
   @State initError: string = '';
   @State likedIds: string[] = [];
+  @State activeTag: string = '';
 
   @StorageLink('display_nickname') displayNickname: string = '';
   @StorageLink('display_avatar') displayAvatar: string = '';
@@ -152,7 +154,7 @@ struct SocialMediaMain {
         likes: item.likes, comments: item.comments,
         isLiked: this.isPostLiked(item.postId),
         commentsList: item.commentsList, categoryId: item.categoryId,
-        categoryName: item.categoryName
+        categoryName: item.categoryName, tags: item.tags || []
       });
     }
     this.feedData = updatedFeed;
@@ -167,7 +169,7 @@ struct SocialMediaMain {
         likes: item.likes, comments: item.comments,
         isLiked: this.isPostLiked(item.postId),
         commentsList: item.commentsList, categoryId: item.categoryId,
-        categoryName: item.categoryName
+        categoryName: item.categoryName, tags: item.tags || []
       });
     }
     this.myWorks = updatedWorks;
@@ -334,7 +336,7 @@ struct SocialMediaMain {
             isLiked: serverIsLiked,
             commentsList: [],
             categoryId: post.categoryId,
-            categoryName: post.categoryName,
+            categoryName: post.categoryName, tags: post.getTagsArray(),
           };
 
           try {
@@ -437,7 +439,7 @@ struct SocialMediaMain {
           description: item.description, createTime: item.createTime,
           likes: newCount, comments: item.comments, isLiked: isLiked,
           commentsList: item.commentsList, categoryId: item.categoryId,
-          categoryName: item.categoryName
+          categoryName: item.categoryName, tags: item.tags || []
         });
       } else {
         updatedFeed.push({
@@ -446,7 +448,7 @@ struct SocialMediaMain {
           description: item.description, createTime: item.createTime,
           likes: item.likes, comments: item.comments, isLiked: item.isLiked,
           commentsList: item.commentsList, categoryId: item.categoryId,
-          categoryName: item.categoryName
+          categoryName: item.categoryName, tags: item.tags || []
         });
       }
     }
@@ -463,7 +465,7 @@ struct SocialMediaMain {
           description: item.description, createTime: item.createTime,
           likes: newCount, comments: item.comments, isLiked: isLiked,
           commentsList: item.commentsList, categoryId: item.categoryId,
-          categoryName: item.categoryName
+          categoryName: item.categoryName, tags: item.tags || []
         });
       } else {
         updatedWorks.push({
@@ -472,7 +474,7 @@ struct SocialMediaMain {
           description: item.description, createTime: item.createTime,
           likes: item.likes, comments: item.comments, isLiked: item.isLiked,
           commentsList: item.commentsList, categoryId: item.categoryId,
-          categoryName: item.categoryName
+          categoryName: item.categoryName, tags: item.tags || []
         });
       }
     }
@@ -524,7 +526,7 @@ struct SocialMediaMain {
 
   // ============ 发布帖子 ============
 
-  async handlePublish(description: string, imageUrl: string): Promise<void> {
+  async handlePublish(description: string, imageUrl: string, selectedTags?: string[]): Promise<void> {
     try {
       const loginUsername: string = AppStorage.get<string>('login_username') || 'local_user';
       const deviceId: string = AppStorage.get<string>('device_id') || 'local_device';
@@ -561,6 +563,10 @@ struct SocialMediaMain {
 
       if (result.success && result.data !== null) {
         const post = result.data;
+        const tagList: string[] = selectedTags || [];
+        post.setTagsArray(tagList);
+        const tagPostRepo: PostRepository = new PostRepository();
+        await tagPostRepo.updatePostTags(post.postId, tagList);
         const images: string[] = post.getImagePathArray();
         const newPost: FeedItemType = {
           id: this.feedIdCounter++,
@@ -577,7 +583,7 @@ struct SocialMediaMain {
           isLiked: false,
           commentsList: [],
           categoryId: post.categoryId,
-          categoryName: post.categoryName,
+          categoryName: post.categoryName, tags: tagList,
         };
 
         this.feedData = [newPost, ...this.feedData];
@@ -632,7 +638,7 @@ struct SocialMediaMain {
               isLiked: this.isPostLiked(post.postId),
               commentsList: [],
               categoryId: post.categoryId,
-              categoryName: post.categoryName,
+              categoryName: post.categoryName, tags: post.getTagsArray(),
             });
           }
         }
@@ -709,6 +715,10 @@ struct SocialMediaMain {
                 onDelete: (postId: string): void => {
                   this.handleDelete(postId);
                 },
+                onTagClick: (tag: string): void => {
+                  this.activeTag = tag;
+                  this.currentTabIndex = 1;
+                },
                 displayNickname: this.displayNickname,
                 isLoggedIn: this.isLoggedIn,
                 onGoToProfile: (): void => { this.currentTabIndex = 4; },
@@ -724,14 +734,15 @@ struct SocialMediaMain {
           if (this.currentTabIndex === 1) {
             CategoryView({
               isLoggedIn: this.isLoggedIn,
+              activeTag: this.activeTag,
               onGoToProfile: (): void => { this.currentTabIndex = 4; }
             })
           }
           if (this.currentTabIndex === 2) {
             PublishView({
               uiContext: this.uiContext,
-              onPublish: (description: string, imageUrl: string): void => {
-                this.handlePublish(description, imageUrl);
+              onPublish: (description: string, imageUrl: string, tags: string[]): void => {
+                this.handlePublish(description, imageUrl, tags);
               },
               isLoggedIn: this.isLoggedIn,
               onGoToProfile: (): void => { this.currentTabIndex = 4; }
@@ -841,7 +852,7 @@ struct SocialMediaMain {
             username: item.username, userId: item.userId, avatar: item.avatar,
             description: item.description, createTime: item.createTime,
             likes: item.likes, comments: dbComments.length, isLiked: item.isLiked,
-            commentsList: dbComments, categoryId: item.categoryId, categoryName: item.categoryName
+            commentsList: dbComments, categoryId: item.categoryId, categoryName: item.categoryName, tags: item.tags || []
           });
         } else {
           result.push({
@@ -849,7 +860,7 @@ struct SocialMediaMain {
             username: item.username, userId: item.userId, avatar: item.avatar,
             description: item.description, createTime: item.createTime,
             likes: item.likes, comments: item.comments, isLiked: item.isLiked,
-            commentsList: item.commentsList, categoryId: item.categoryId, categoryName: item.categoryName
+            commentsList: item.commentsList, categoryId: item.categoryId, categoryName: item.categoryName, tags: item.tags || []
           });
         }
       }
@@ -871,6 +882,7 @@ struct FeedList {
   onLikeChange: (postId: string, isLiked: boolean, newCount: number) => void = () => {};
   onCommentAdd: (postId: string, comment: CommentItemType) => void = () => {};
   onDelete: (postId: string) => void = () => {};
+  onTagClick: (tag: string) => void = () => {};
   @Prop displayNickname: string = '';
   @Prop isLoggedIn: boolean = false;
   onGoToProfile?: () => void;
@@ -908,6 +920,7 @@ struct FeedList {
                 onLikeChange: this.onLikeChange,
                 onCommentAdd: this.onCommentAdd,
                 onDelete: this.onDelete,
+                onTagClick: this.onTagClick,
                 displayNickname: this.displayNickname
               })
             }
@@ -945,12 +958,13 @@ struct FeedItem {
   @Prop feed: FeedItemType = {
     id: 0, postId: '', type: 'image', url: '', username: '', userId: '',
     avatar: '', description: '', createTime: 0, likes: 0, comments: 0,
-    isLiked: false, commentsList: [], categoryId: '', categoryName: ''
+    isLiked: false, commentsList: [], categoryId: '', categoryName: '', tags: []
   };
   onImageClick: (url: string) => void = () => {};
   onLikeChange: (postId: string, isLiked: boolean, newCount: number) => void = () => {};
   onCommentAdd: (postId: string, comment: CommentItemType) => void = () => {};
   onDelete: (postId: string) => void = () => {};
+  onTagClick: (tag: string) => void = () => {};
   @State isLiked: boolean = false;
   @State likeCount: number = 0;
   @State showCommentInput: boolean = false;
@@ -1171,13 +1185,32 @@ struct FeedItem {
         .fontSize(15).fontColor('#444444')
         .padding({ left: 12, right: 12, top: 8 }).width('100%')
 
-      Image(this.feed.url.length > 0 ? this.feed.url : $r('app.media.nai'))
-        .width('100%').height(200)
-        .objectFit(ImageFit.Cover)
-        .borderRadius(8).margin({ top: 8 }).backgroundColor('#E0E0E0')
-        .onClick(() => {
-          if (this.feed.url.length > 0) { this.onImageClick(this.feed.url); }
-        })
+      Stack() {
+        Image(this.feed.url.length > 0 ? this.feed.url : $r('app.media.nai'))
+          .width('100%').height(200)
+          .objectFit(ImageFit.Cover)
+          .borderRadius(8).backgroundColor('#E0E0E0')
+          .id(this.feed.postId + '_img')
+          .onClick(() => {
+            if (this.feed.url.length > 0) { this.onImageClick(this.feed.url); }
+          })
+        if (this.feed.tags && this.feed.tags.length > 0) {
+          Row() {
+            ForEach(this.feed.tags.slice(0, 2), (tag: string) => {
+              Text(tag)
+                .fontSize(10).fontColor('#FFFFFF')
+                .backgroundColor('rgba(0,0,0,0.5)')
+                .borderRadius(8).padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                .margin({ left: 4 })
+                .onClick(() => {
+                  this.onTagClick(tag);
+                })
+            })
+          }
+          .position({ bottom: 8, right: 8 })
+        }
+      }
+      .width('100%').height(208).padding({ top: 8 }).clip(false)
 
       Row() {
         Row() {
@@ -1461,8 +1494,9 @@ struct PublishView {
   @State isPressed1: boolean = false;
   @State isPressed2: boolean = false;
   @State isPublishing: boolean = false;
+  @State selectedTags: string[] = [];
   @Prop uiContext?: common.Context;
-  onPublish: (description: string, imageUrl: string) => void = () => {};
+  onPublish: (description: string, imageUrl: string, tags: string[]) => void = () => {};
   @Prop isLoggedIn: boolean = false;
   onGoToProfile?: () => void;
 
@@ -1578,6 +1612,34 @@ struct PublishView {
           .width('90%').padding({ top: 16, bottom: 16 })
           .borderWidth({ bottom: 1 }).borderColor('#EEEEEE')
 
+          Column() {
+            Text('添加标签').fontSize(14).fontColor('#999999').width('100%').margin({ bottom: 8 })
+            Flex({ wrap: FlexWrap.Wrap }) {
+              ForEach(['#城市记忆', '#美食探店', '#旅行日记', '#摄影日常', '#宠物生活', '#时尚穿搭'], (tag: string) => {
+                Text(tag)
+                  .fontSize(13)
+                  .fontColor(this.selectedTags.indexOf(tag) >= 0 ? '#FFD700' : '#666666')
+                  .backgroundColor(this.selectedTags.indexOf(tag) >= 0 ? 'rgba(255,215,0,0.15)' : '#F0F0F0')
+                  .borderWidth(this.selectedTags.indexOf(tag) >= 0 ? 1 : 0)
+                  .borderColor('#FFD700')
+                  .borderRadius(16).padding({ left: 12, right: 12, top: 6, bottom: 6 })
+                  .margin({ right: 8, bottom: 8 })
+                  .onClick(() => {
+                    const idx: number = this.selectedTags.indexOf(tag);
+                    if (idx >= 0) {
+                      this.selectedTags.splice(idx, 1);
+                      this.selectedTags = this.selectedTags.slice();
+                    } else {
+                      this.selectedTags.push(tag);
+                      this.selectedTags = this.selectedTags.slice();
+                    }
+                  })
+              })
+            }
+            .width('100%')
+          }
+          .width('90%').padding({ top: 12, bottom: 8 })
+
           Button(this.isPublishing ? '发布中...' : '发布')
             .width('90%').height(50)
             .backgroundColor(this.isPublishing ? '#CCCCCC' : '#FFD700')
@@ -1590,10 +1652,11 @@ struct PublishView {
                 return;
               }
               this.isPublishing = true;
-              this.onPublish(this.description, this.selectedImage);
+              this.onPublish(this.description, this.selectedImage, this.selectedTags);
               this.description = '';
               this.hasSelectedImage = false;
               this.selectedImage = '';
+              this.selectedTags = [];
               this.isPublishing = false;
             })
         }
@@ -1637,6 +1700,7 @@ struct CategoryView {
   @State isLoadingCategory: boolean = false;
   @State categoryError: string = '';
   @Prop isLoggedIn: boolean = false;
+  @Prop activeTag: string = '';
   onGoToProfile?: () => void;
 
   private categories: Array<CategoryItemType> = [
@@ -1683,8 +1747,41 @@ struct CategoryView {
     this.isLoadingCategory = false;
   }
 
-  handleTagClick(tag: HotTagType): void {
-    this.handleCategoryClick(tag.category, tag.categoryId);
+  @State selectedTag: string = '';
+  @State showTagPhotos: boolean = false;
+  @State tagPhotoItems: PhotoItemType[] = [];
+  private tagFromOutside: boolean = false;
+
+  aboutToAppear(): void {
+    if (this.activeTag.length > 0 && !this.tagFromOutside) {
+      this.tagFromOutside = true;
+      const found: HotTagType | undefined = this.hotTags.find(t => t.tag === this.activeTag);
+      if (found) {
+        this.handleTagClick(found);
+      }
+    }
+  }
+
+  async handleTagClick(tag: HotTagType): Promise<void> {
+    this.selectedTag = tag.tag;
+    this.showTagPhotos = true;
+    this.tagPhotoItems = [];
+    try {
+      const result = await postApi.getList(1, 100);
+      if (result.success && result.data !== null) {
+        const items: PhotoItemType[] = [];
+        for (let i = 0; i < result.data.length; i++) {
+          const tagsArr: string[] = result.data[i].getTagsArray();
+          if (tagsArr.indexOf(tag.tag) >= 0) {
+            const images: string[] = result.data[i].getImagePathArray();
+            if (images.length > 0) {
+              items.push({ id: items.length + 1, image: images[0], postId: result.data[i].postId });
+            }
+          }
+        }
+        this.tagPhotoItems = items;
+      }
+    } catch (_) {}
   }
 
   build() {
@@ -1709,7 +1806,7 @@ struct CategoryView {
       .backgroundColor('#F8F8FC')
     } else {
       Column() {
-        if (!this.showPhotos) {
+        if (!this.showPhotos && !this.showTagPhotos) {
           Grid() {
             ForEach(this.categories, (cat: CategoryItemType) => {
               GridItem() {
@@ -1730,21 +1827,50 @@ struct CategoryView {
             Text('热门标签')
               .fontSize(20).fontWeight(FontWeight.Medium)
               .fontColor('#1A1A2E').width('100%')
-              .margin({ top: 20, bottom: 12 })
-            Row() {
+              .margin({ top: 20, bottom: 12 }).padding({ left: 12 })
+            Grid() {
               ForEach(this.hotTags, (tagItem: HotTagType) => {
-                Text(tagItem.tag)
-                  .fontSize(13).fontColor('#666666')
-                  .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-                  .backgroundColor('#F0F0F0').borderRadius(16)
-                  .margin({ right: 8, bottom: 8 })
-                  .onClick(() => { this.handleTagClick(tagItem); })
+                GridItem() {
+                  Text(tagItem.tag)
+                    .fontSize(14).fontColor('#666666')
+                    .padding({ top: 10, bottom: 10 })
+                    .backgroundColor('#F0F0F0').borderRadius(16)
+                    .textAlign(TextAlign.Center).width('100%')
+                    .onClick(() => { this.handleTagClick(tagItem); })
+                }
               })
             }
-            .width('100%')
+            .columnsTemplate('1fr 1fr')
+            .rowsGap(10).columnsGap(10)
+            .width('90%').layoutWeight(1)
+            .padding({ bottom: 20 })
           }
-          .width('100%').alignItems(HorizontalAlign.Start)
-          Blank()
+          .width('100%').alignItems(HorizontalAlign.Center).layoutWeight(1)
+        } else if (this.showTagPhotos) {
+          Column() {
+            Row() {
+              Text('← 返回')
+                .fontSize(15).fontColor('#FFD700')
+                .onClick(() => { this.showTagPhotos = false; this.selectedTag = ''; })
+                .margin({ right: 12 })
+              Text(this.selectedTag)
+                .fontSize(20).fontWeight(FontWeight.Bold).fontColor('#1A1A2E').layoutWeight(1)
+            }
+            .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 }).backgroundColor(Color.White)
+            Grid() {
+              ForEach(this.tagPhotoItems, (photo: PhotoItemType) => {
+                GridItem() {
+                  Column() {
+                    Image(photo.image).width('100%').aspectRatio(1).objectFit(ImageFit.Cover)
+                      .borderRadius(8).backgroundColor('#E8E8E8')
+                  }.width('100%')
+                }
+              })
+            }
+            .columnsTemplate('1fr 1fr 1fr').rowsGap(12).columnsGap(12)
+            .width('95%').padding({ top: 12, bottom: 12 }).layoutWeight(1)
+          }
+          .width('100%').height('100%').backgroundColor('#F8F8FC')
         } else {
           Column() {
             Row() {
@@ -2145,7 +2271,7 @@ struct ProfileView {
             username: old.username, userId: old.userId, avatar: old.avatar,
             description: old.description, createTime: old.createTime,
             likes: old.likes, comments: items.length, isLiked: old.isLiked,
-            commentsList: items, categoryId: old.categoryId, categoryName: old.categoryName
+            commentsList: items, categoryId: old.categoryId, categoryName: old.categoryName, tags: old.tags || []
           };
           this.detailPost = updated;
         }
@@ -2181,7 +2307,7 @@ struct ProfileView {
       createTime: this.detailPost!.createTime, likes: this.detailPost!.likes,
       comments: newList.length, isLiked: this.detailPost!.isLiked,
       commentsList: newList, categoryId: this.detailPost!.categoryId,
-      categoryName: this.detailPost!.categoryName
+      categoryName: this.detailPost!.categoryName, tags: this.detailPost!.tags || []
     };
     this.detailPost = updated;
   }
@@ -2225,7 +2351,7 @@ struct ProfileView {
           createTime: oldPost.createTime, likes: oldPost.likes,
           comments: newList.length, isLiked: oldPost.isLiked,
           commentsList: newList, categoryId: oldPost.categoryId,
-          categoryName: oldPost.categoryName
+          categoryName: oldPost.categoryName, tags: oldPost.tags || []
         };
         this.detailPost = updatedPost;
         this.postCommentText = '';
@@ -2467,7 +2593,7 @@ struct ProfileView {
                       description: post.description, createTime: post.createTime,
                       likes: post.likes, comments: post.comments, isLiked: post.isLiked,
                       commentsList: post.commentsList, categoryId: post.categoryId,
-                      categoryName: post.categoryName
+                      categoryName: post.categoryName, tags: post.tags || []
                     };
                     this.detailPost = updated;
                     this.showPostComments = false;
@@ -2544,10 +2670,6 @@ struct ProfileView {
               .width('90%').padding({ top: 30, bottom: 20 })
 
               Row() {
-                Column() {
-                  Text('128').fontSize(20).fontWeight(FontWeight.Bold).fontColor(Color.White)
-                  Text('关注').fontSize(13).fontColor('rgba(255,255,255,0.7)')
-                }.margin({ right: 30 })
                 Column() {
                   Text(this.myWorks.length.toString()).fontSize(20).fontWeight(FontWeight.Bold).fontColor(Color.White)
                   Text('作品').fontSize(13).fontColor('rgba(255,255,255,0.7)')
@@ -2628,7 +2750,7 @@ struct ProfileView {
                             description: post.description, createTime: post.createTime,
                             likes: post.likes, comments: post.comments, isLiked: post.isLiked,
                             commentsList: post.commentsList, categoryId: post.categoryId,
-                            categoryName: post.categoryName
+                            categoryName: post.categoryName, tags: post.tags || []
                           };
                           this.detailPost = updated;
                           this.showPostComments = false;
