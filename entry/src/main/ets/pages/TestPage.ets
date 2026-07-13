@@ -1173,7 +1173,7 @@ struct FeedItem {
 
       Image(this.feed.url.length > 0 ? this.feed.url : $r('app.media.nai'))
         .width('100%').height(200)
-        .objectFit(ImageFit.Contain)
+        .objectFit(ImageFit.Cover)
         .borderRadius(8).margin({ top: 8 }).backgroundColor('#E0E0E0')
         .onClick(() => {
           if (this.feed.url.length > 0) { this.onImageClick(this.feed.url); }
