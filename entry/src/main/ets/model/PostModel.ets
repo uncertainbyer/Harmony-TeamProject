@@ -11,6 +11,7 @@ export class PostModel {
   imageCount: number = 0;
   categoryId: string = '';
   categoryName: string = '';
+  tags: string = '';
   likeCount: number = 0;
   commentCount: number = 0;
   isLiked: boolean = false;
@@ -32,8 +33,18 @@ export class PostModel {
     this.content = content;
     this.imagePaths = imagePaths;
     this.categoryId = categoryId;
+    this.tags = '[]';
     this.createTime = Date.now();
     this.updateTime = Date.now();
+  }
+
+  getTagsArray(): string[] {
+    if (!this.tags) return [];
+    try { return JSON.parse(this.tags) as string[]; } catch { return []; }
+  }
+
+  setTagsArray(tags: string[]): void {
+    this.tags = JSON.stringify(tags);
   }
 
   static getTableName(): string {
@@ -51,6 +62,7 @@ export class PostModel {
     image_count INTEGER DEFAULT 0,
     category_id TEXT,
     category_name TEXT,
+    tags TEXT DEFAULT '[]',
     like_count INTEGER DEFAULT 0,
     comment_count INTEGER DEFAULT 0,
     create_time INTEGER NOT NULL,
@@ -73,7 +85,7 @@ export class PostModel {
   static getColumns(): string[] {
     return [
       'post_id', 'user_id', 'user_name', 'user_avatar', 'content',
-      'image_paths', 'image_count', 'category_id', 'category_name',
+      'image_paths', 'image_count', 'category_id', 'category_name', 'tags',
       'like_count', 'comment_count',
       'create_time', 'update_time', 'device_id', 'sync_status', 'is_deleted'
     ];
@@ -94,6 +106,7 @@ export class PostModel {
     bucket['image_count'] = this.imageCount;
     bucket['category_id'] = this.categoryId;
     bucket['category_name'] = this.categoryName;
+    bucket['tags'] = this.tags;
     bucket['like_count'] = this.likeCount;
     bucket['comment_count'] = this.commentCount;
     bucket['create_time'] = this.createTime;

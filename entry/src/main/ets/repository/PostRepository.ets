@@ -316,6 +316,18 @@ export class PostRepository {
     return await this.rdbManager.update(PostModel.getTableName(), values, predicates);
   }
 
+  async updatePostTags(postId: string, tags: string[]): Promise<number> {
+    const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates(
+      PostModel.getTableName()
+    );
+    predicates.equalTo('post_id', postId);
+    const values: relationalStore.ValuesBucket = {};
+    values['tags'] = JSON.stringify(tags);
+    values['update_time'] = Date.now();
+    values['sync_status'] = 0;
+    return await this.rdbManager.update(PostModel.getTableName(), values, predicates);
+  }
+
   /**
    * 查询未同步的帖子
    * @returns 未同步的帖子列表
@@ -441,6 +453,7 @@ export class PostRepository {
     post.imageCount = resultSet.getLong(resultSet.getColumnIndex('image_count'));
     post.categoryId = resultSet.getString(resultSet.getColumnIndex('category_id'));
     post.categoryName = resultSet.getString(resultSet.getColumnIndex('category_name'));
+    try { post.tags = resultSet.getString(resultSet.getColumnIndex('tags')); } catch (_) {}
     post.likeCount = resultSet.getLong(resultSet.getColumnIndex('like_count'));
     post.commentCount = resultSet.getLong(resultSet.getColumnIndex('comment_count'));
     post.createTime = resultSet.getLong(resultSet.getColumnIndex('create_time'));
@@ -479,6 +492,7 @@ export class PostRepository {
       post.imageCount = resultSet.getLong(resultSet.getColumnIndex('image_count'));
       post.categoryId = resultSet.getString(resultSet.getColumnIndex('category_id'));
       post.categoryName = resultSet.getString(resultSet.getColumnIndex('category_name'));
+      try { post.tags = resultSet.getString(resultSet.getColumnIndex('tags')); } catch (_) {}
       post.likeCount = resultSet.getLong(resultSet.getColumnIndex('like_count'));
       post.commentCount = resultSet.getLong(resultSet.getColumnIndex('comment_count'));
       post.createTime = resultSet.getLong(resultSet.getColumnIndex('create_time'));

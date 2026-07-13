@@ -86,6 +86,10 @@ export class RdbManager {
         await this.rdbStore.executeSql(categoryIndexes[i]);
       }
 
+      // 旧数据库迁移：添加 tags 列
+      try {
+        await this.rdbStore.executeSql("ALTER TABLE post_info ADD COLUMN tags TEXT DEFAULT '[]'");
+      } catch (_) {}
       console.info('[RdbManager] 数据表创建成功');
     } catch (err) {
       const errorMsg: string = (err as Error).message;

@@ -467,6 +467,7 @@ class DistributedApi {
         postItem['updateTime'] = p.updateTime;
         postItem['deviceId'] = p.deviceId;
         postItem['isDeleted'] = p.isDeleted;
+        postItem['tags'] = p.tags;
         (uploadData['posts'] as Record<string, Object>[]).push(postItem);
       }
       console.info('[DistributedApi] 构建上传: posts=' + unsyncedPosts.length + ', comments=' + unsyncedComments.length);
@@ -570,6 +571,8 @@ class DistributedApi {
             post.updateTime = (sp['updateTime'] as number) || Date.now();
             post.deviceId = (sp['deviceId'] as string) || '';
             post.isDeleted = (sp['isDeleted'] as boolean) || false;
+            const rawTags: string | undefined = sp['tags'] as string | undefined;
+            post.tags = rawTags !== undefined ? rawTags : '[]';
             post.syncStatus = 1;
             const upserted: boolean = await postRepo.upsertRemotePost(post);
             if (upserted) totalSynced++;
